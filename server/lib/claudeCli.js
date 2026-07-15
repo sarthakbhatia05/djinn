@@ -11,7 +11,7 @@ function createClaudeCli({ spawnFn = spawn, claudeBin = 'claude', onStatusChange
   function runOneShot(args, cwd, trackId) {
     return new Promise((resolve, reject) => {
       const child = spawnFn(claudeBin, args, { cwd });
-      running.set(trackId, { child, startedAt: Date.now() });
+      running.set(trackId, { child });
       onStatusChange(trackId, 'running');
 
       let stdout = '';
@@ -19,7 +19,10 @@ function createClaudeCli({ spawnFn = spawn, claudeBin = 'claude', onStatusChange
       child.stdout.on('data', (d) => { stdout += d; });
       child.stderr.on('data', (d) => { stderr += d; });
 
+      let settled = false;
       const finish = (err, value) => {
+        if (settled) return;
+        settled = true;
         running.delete(trackId);
         onStatusChange(trackId, 'idle');
         if (err) reject(err);

@@ -86,3 +86,20 @@ test('onStatusChange fires running then idle', async () => {
   await cli.sendMessage('abc', 'D:\\demo', 'go');
   assert.deepStrictEqual(events, ['running', 'idle']);
 });
+
+test('onStatusChange fires idle only once when spawn errors then closes', async () => {
+  const spawnFn = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    process.nextTick(() => {
+      child.emit('error', new Error('spawn ENOENT'));
+      child.emit('close', 1);   // Node emits close after error on spawn failure
+    });
+    return child;
+  };
+  const events = [];
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude', onStatusChange: (id, status) => events.push(status) });
+  await cli.startSession('D:\\demo', 'go').catch(() => {});
+  assert.deepStrictEqual(events, ['running', 'idle']);
+});
