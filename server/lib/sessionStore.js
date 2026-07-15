@@ -47,8 +47,16 @@ function createSessionStore({
   registryPath = path.join(os.homedir(), '.claude.json'),
 } = {}) {
   function loadRegistryKeys() {
-    const registry = readJson(registryPath, { projects: {} });
-    return Object.keys(registry.projects || {});
+    // ~/.claude.json is written live by the Claude Code CLI; a mid-write /
+    // truncated read yields malformed JSON. readJson only falls back on ENOENT,
+    // so a SyntaxError would otherwise propagate and crash the store. Treat any
+    // read/parse failure as an empty registry (sessions get pathResolved:false).
+    try {
+      const registry = readJson(registryPath, { projects: {} });
+      return Object.keys(registry.projects || {});
+    } catch {
+      return [];
+    }
   }
 
   function resolveProjectPath(projectFolder, registryKeys) {

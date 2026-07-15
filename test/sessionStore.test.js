@@ -83,3 +83,65 @@ test('listProjects groups sessions by resolved project path', () => {
   assert.strictEqual(projects[0].projectPath, 'D:/Projects/DFM-Project/oarc-function-app');
   assert.strictEqual(projects[0].sessionCount, 1);
 });
+
+test('listSessions degrades gracefully when the registry file is malformed JSON', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  const projectDir = path.join(claudeHomeDir, 'D--Projects-DFM-Project-oarc-function-app');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'abc.jsonl'), JSON.stringify({ type: 'mode', sessionId: 'abc' }) + '\n', 'utf-8');
+  // Registry mid-write / truncated read: not valid JSON.
+  fs.writeFileSync(registryPath, '{ not valid json', 'utf-8');
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions();
+
+  assert.strictEqual(sessions.length, 1);
+  assert.strictEqual(sessions[0].id, 'abc');
+  assert.strictEqual(sessions[0].pathResolved, false);
+});
+
+test('listProjects counts multiple sessions and sorts projects by lastActivity descending', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+
+  // Older project: two sessions, both older mtimes.
+  const olderFolder = 'D--Projects-older-app';
+  const olderDir = path.join(claudeHomeDir, olderFolder);
+  fs.mkdirSync(olderDir, { recursive: true });
+  const olderDate = new Date('2026-07-10T00:00:00.000Z');
+  for (const id of ['s1', 's2']) {
+    const fp = path.join(olderDir, `${id}.jsonl`);
+    fs.writeFileSync(fp, JSON.stringify({ type: 'mode', sessionId: id }) + '\n', 'utf-8');
+    fs.utimesSync(fp, olderDate, olderDate);
+  }
+
+  // Newer project: one session, most-recent mtime.
+  const newerFolder = 'D--Projects-newer-app';
+  const newerDir = path.join(claudeHomeDir, newerFolder);
+  fs.mkdirSync(newerDir, { recursive: true });
+  const newerDate = new Date('2026-07-14T00:00:00.000Z');
+  const newerFp = path.join(newerDir, 's3.jsonl');
+  fs.writeFileSync(newerFp, JSON.stringify({ type: 'mode', sessionId: 's3' }) + '\n', 'utf-8');
+  fs.utimesSync(newerFp, newerDate, newerDate);
+
+  fs.writeFileSync(registryPath, JSON.stringify({
+    projects: {
+      'D:/Projects/older-app': { lastSessionId: 's2' },
+      'D:/Projects/newer-app': { lastSessionId: 's3' },
+    },
+  }), 'utf-8');
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const projects = store.listProjects();
+
+  assert.strictEqual(projects.length, 2);
+  // Most-recent project first.
+  assert.strictEqual(projects[0].projectPath, 'D:/Projects/newer-app');
+  assert.strictEqual(projects[1].projectPath, 'D:/Projects/older-app');
+  assert.ok(projects[0].lastActivity > projects[1].lastActivity);
+  // Two-session project reports the correct count.
+  assert.strictEqual(projects[1].sessionCount, 2);
+});
