@@ -1,5 +1,7 @@
 const express = require('express');
 const path = require('path');
+const { createSessionsRouter } = require('./routes/sessions');
+const { createProjectsRouter } = require('./routes/projects');
 
 function createApp(deps = {}) {
   const app = express();
@@ -9,6 +11,9 @@ function createApp(deps = {}) {
   app.get('/api/health', (req, res) => {
     res.json({ ok: true });
   });
+
+  app.use('/api/sessions', createSessionsRouter(deps));
+  app.use('/api/projects', createProjectsRouter(deps));
 
   return app;
 }
