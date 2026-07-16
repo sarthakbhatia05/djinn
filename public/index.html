@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=DotGothic16&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<script>
+  (function () {
+    function apply(t) { document.documentElement.setAttribute('data-theme', t); }
+    window.__toggleTheme = function () {
+      var cur = document.documentElement.getAttribute('data-theme');
+      var next = cur === 'light' ? 'dark' : (cur === 'dark' ? 'light' : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'dark' : 'light'));
+      apply(next);
+    };
+  })();
+</script>
+</head>
+<body>
+
+<div class="dot-grid app-shell">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <div class="logo-ring"></div>
+      <div class="eyebrow header-title">CLAUDE CODE <span class="accent-dot">·</span> CONSOLE</div>
+    </div>
+    <div class="header-right">
+      <div class="mono search-box">
+        <span>⌘K</span><span class="hint">search sessions, repos, tasks</span>
+      </div>
+      <div class="running-count">
+        <div class="status-dot status-dot--pulse-fast" id="running-count-dot"></div>
+        <span class="dotnum" id="running-count-value">0</span>&nbsp;running
+      </div>
+      <div class="theme-toggle ghost icon-btn" onclick="__toggleTheme()" title="Toggle theme">◐</div>
+
+      <!-- New session control -->
+      <div class="new-session-wrap">
+        <div class="btn new-session-btn" id="new-session-btn">+ New session</div>
+
+        <div class="dropdown-menu" id="new-session-menu" hidden>
+          <div class="dropdown-header">
+            <div class="eyebrow">Run agent in…</div>
+          </div>
+          <div class="dropdown-body">
+            <div class="eyebrow dropdown-section-label">Recent directories</div>
+            <div id="recent-directories-list"></div>
+            <div class="menu-divider"></div>
+            <div class="menu-item menu-item--browse" id="browse-directory-btn">
+              <span class="icon">＋</span>
+              <div class="label">Browse for a different directory…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div class="body-layout">
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="eyebrow sidebar-label">Workspace</div>
+      <div class="row row--active" id="all-sessions-row">
+        <div class="row-title">All sessions</div>
+        <div class="dotnum row-count" id="all-sessions-count">0</div>
+      </div>
+      <div class="row" id="memory-row">
+        <div class="row-title">Memory</div>
+      </div>
+
+      <div class="eyebrow sidebar-label sidebar-label--projects">Projects</div>
+      <div id="project-list"></div>
+
+      <div class="sidebar-footer">
+        <div class="mono sidebar-footer-text" id="sidebar-footer-text">local</div>
+      </div>
+    </div>
+
+    <!-- Main -->
+    <div class="main">
+      <div class="main-content" id="main-content">
+
+        <!-- Command bar -->
+        <div class="command-bar">
+          <div class="command-bar-hint">
+            <div class="mono command-caret" style="color:var(--accent); font-size:14px;">▍</div>
+            <div class="eyebrow command-bar-hint-text">issue a command — I'll route it to an agent, in the directory you choose</div>
+          </div>
+          <div class="command-input-row">
+            <input class="mono command-input" id="command-input" placeholder="research the billing webhook failures and propose a fix">
+            <button class="btn dotnum command-send-btn" id="command-send-btn">Send</button>
+          </div>
+          <div class="command-pills">
+            <div class="pill">Research</div>
+            <div class="pill">Fix a bug</div>
+            <div class="pill">Refactor</div>
+            <div class="pill">Ship a PR</div>
+          </div>
+        </div>
+
+        <div class="section-header">
+          <div class="eyebrow section-header-title">ALL PROJECTS</div>
+          <div class="mono section-header-sub" id="section-header-sub">0 agents active across 0 repos</div>
+        </div>
+
+        <div class="eyebrow sessions-eyebrow">Running &amp; recent sessions</div>
+        <div class="session-grid" id="session-grid"></div>
+
+        <div class="section-label-row">
+          <div class="eyebrow">Backlog</div>
+          <div class="dotnum section-label-count" id="backlog-count">0 queued</div>
+        </div>
+        <div class="backlog-add-row">
+          <input class="mono backlog-input" id="backlog-input" placeholder="Add a task, then assign it to a repo…">
+          <button class="btn dotnum backlog-add-btn" id="backlog-add-btn">+ Add</button>
+        </div>
+        <div class="backlog-list" id="backlog-list"></div>
+
+        <!-- Memory panel -->
+        <div class="memory-panel" id="memory-panel" style="display:none">
+          <div class="section-header">
+            <div class="eyebrow section-header-title">MEMORY</div>
+            <div class="mono section-header-sub">Notes carried into every agent session</div>
+          </div>
+
+          <div class="memory-section">
+            <div class="eyebrow memory-section-label">Common memory (applies to all projects)</div>
+            <textarea class="memory-textarea" id="memory-common-text" placeholder="Notes that should apply across every project…"></textarea>
+            <button class="memory-save-btn" id="memory-common-save">Save</button>
+          </div>
+
+          <div class="memory-section">
+            <div class="eyebrow memory-section-label">Project memory</div>
+            <select class="memory-select" id="memory-project-select"></select>
+            <textarea class="memory-textarea" id="memory-project-text" placeholder="Notes specific to the selected project…"></textarea>
+            <button class="memory-save-btn" id="memory-project-save">Save</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Detail drawer -->
+      <div class="drawer" id="detail-drawer" style="display:none">
+        <div class="drawer-header">
+          <div>
+            <div class="drawer-status-row">
+              <div class="status-dot" id="detail-status-dot"></div>
+              <div class="eyebrow" id="detail-status-label"></div>
+            </div>
+            <div class="detail-title" id="detail-title"></div>
+            <div class="mono detail-meta" id="detail-meta"></div>
+          </div>
+          <div class="ghost drawer-close" id="detail-close-btn">×</div>
+        </div>
+
+        <div class="drawer-body">
+          <div class="eyebrow plan-eyebrow">Agent plan</div>
+          <div class="plan-list" id="detail-plan-list"></div>
+
+          <div class="eyebrow output-eyebrow">Output</div>
+          <div class="mono output-box" id="detail-output"></div>
+        </div>
+
+        <div class="drawer-footer">
+          <input class="mono detail-send-input" id="detail-send-input" placeholder="Send an instruction to this agent…">
+          <button class="btn dotnum detail-send-btn" id="detail-send-btn">Send</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="/format.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
