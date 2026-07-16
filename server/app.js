@@ -4,6 +4,7 @@ const { createSessionsRouter } = require('./routes/sessions');
 const { createProjectsRouter } = require('./routes/projects');
 const { createBacklogRouter } = require('./routes/backlog');
 const { createMemoryRouter } = require('./routes/memory');
+const { createDirectoriesRouter } = require('./routes/directories');
 
 function createApp(deps = {}) {
   const app = express();
@@ -18,6 +19,7 @@ function createApp(deps = {}) {
   app.use('/api/projects', createProjectsRouter(deps));
   app.use('/api/backlog', createBacklogRouter(deps));
   app.use('/api/memory', createMemoryRouter(deps));
+  app.use('/api/directories', createDirectoriesRouter(deps));
 
   return app;
 }
