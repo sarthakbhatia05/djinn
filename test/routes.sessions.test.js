@@ -89,6 +89,32 @@ test('POST /api/sessions/:id/message resumes a known session', async () => {
   server.close();
 });
 
+test('GET /api/sessions/active-count returns activeCount from claudeCli', async () => {
+  const deps = makeDeps({
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async () => ({}),
+      sendMessage: async () => ({}),
+      getActiveCount: () => 3,
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'GET', '/api/sessions/active-count');
+  assert.strictEqual(status, 200);
+  assert.deepStrictEqual(body, { activeCount: 3 });
+  server.close();
+});
+
+test('GET /api/sessions still returns a plain array (response shape regression guard)', async () => {
+  const server = createApp(makeDeps()).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'GET', '/api/sessions');
+  assert.strictEqual(status, 200);
+  assert.ok(Array.isArray(body), 'expected GET /api/sessions to return an array');
+  server.close();
+});
+
 test('GET /api/projects returns the project list', async () => {
   const server = createApp(makeDeps()).listen(0);
   const { port } = server.address();

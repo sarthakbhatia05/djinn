@@ -8,6 +8,14 @@ function createClaudeCli({ spawnFn = spawn, claudeBin = 'claude', onStatusChange
     return running.has(sessionId);
   }
 
+  function getActiveCount() {
+    return running.size;
+  }
+
+  function getActiveIds() {
+    return Array.from(running.keys());
+  }
+
   function runOneShot(args, cwd, trackId) {
     return new Promise((resolve, reject) => {
       const child = spawnFn(claudeBin, args, { cwd });
@@ -53,7 +61,7 @@ function createClaudeCli({ spawnFn = spawn, claudeBin = 'claude', onStatusChange
     return runOneShot(['--resume', sessionId, '--print', message, '--output-format', 'json'], cwd, sessionId);
   }
 
-  return { isRunning, startSession, sendMessage };
+  return { isRunning, startSession, sendMessage, getActiveCount, getActiveIds };
 }
 
 module.exports = { createClaudeCli };

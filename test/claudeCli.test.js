@@ -87,6 +87,29 @@ test('onStatusChange fires running then idle', async () => {
   assert.deepStrictEqual(events, ['running', 'idle']);
 });
 
+test('getActiveCount is 0 initially, 1 while a run is in flight, and 0 after it settles', async () => {
+  let resolveClose;
+  const spawnFn = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    resolveClose = () => {
+      child.stdout.emit('data', Buffer.from('{}'));
+      child.emit('close', 0);
+    };
+    return child;
+  };
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+
+  assert.strictEqual(cli.getActiveCount(), 0);
+  const promise = cli.startSession('D:\\Projects\\demo', 'go');
+  assert.strictEqual(cli.getActiveCount(), 1);
+  assert.strictEqual(cli.getActiveIds().length, 1);
+  resolveClose();
+  await promise;
+  assert.strictEqual(cli.getActiveCount(), 0);
+});
+
 test('onStatusChange fires idle only once when spawn errors then closes', async () => {
   const spawnFn = () => {
     const child = new EventEmitter();

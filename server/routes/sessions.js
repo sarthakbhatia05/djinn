@@ -12,6 +12,13 @@ function createSessionsRouter({ sessionStore, claudeCli, recentDirectories }) {
     res.json(sessions);
   });
 
+  // Registered before the '/:id/message' style param routes for clarity;
+  // 'active-count' is a literal path segment so there's no real ambiguity,
+  // but keep this above anything that could shadow it.
+  router.get('/active-count', (req, res) => {
+    res.json({ activeCount: claudeCli.getActiveCount() });
+  });
+
   router.post('/', async (req, res) => {
     const { cwd, message } = req.body;
     if (!cwd || !message) {

@@ -43,6 +43,18 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Claude Code Dashboard running at http://localhost:${PORT}`);
+// SECURITY: this app has no auth and POST /api/sessions spawns the `claude`
+// CLI in an arbitrary directory on request. Binding to 0.0.0.0 would expose
+// that as remote code execution to anything on the local network. Per spec
+// this is a single-user, single-machine tool — keep the bind on loopback
+// only. Do not "fix" this to listen on all interfaces.
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`Claude Code Dashboard running at http://127.0.0.1:${PORT} (local only)`);
 });
+
+// Agent runs are invoked with `--print` and block the HTTP request open for
+// the full duration of the run, which can legitimately exceed Node's default
+// 5-minute request/headers timeout. Disable both so a long-running agent
+// isn't aborted mid-run while the child process keeps executing.
+server.requestTimeout = 0;
+server.headersTimeout = 0;

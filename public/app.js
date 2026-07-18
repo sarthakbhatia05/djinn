@@ -7,6 +7,7 @@
     recentDirs: [],
     activeDetailId: null,
     selectedDirectory: null,
+    activeCount: 0,
   };
 
   // ---------- fetch helper ----------
@@ -64,9 +65,13 @@
   // ---------- data loads ----------
 
   async function loadSessions() {
-    const sessions = await guarded(fetchJson('/api/sessions'), 'Failed to load sessions');
+    const [sessions, activeCountResult] = await Promise.all([
+      guarded(fetchJson('/api/sessions'), 'Failed to load sessions'),
+      guarded(fetchJson('/api/sessions/active-count'), 'Failed to load active session count'),
+    ]);
     if (sessions === null) return;
     state.sessions = sessions;
+    state.activeCount = activeCountResult ? activeCountResult.activeCount : 0;
     renderSessions();
     updateHeaderStats();
     updateOpenDetailIfPresent();
@@ -288,6 +293,12 @@
   function openDetail(sessionId) {
     const session = state.sessions.find((s) => s.id === sessionId);
     if (!session) return;
+    if (state.activeDetailId !== sessionId) {
+      // Switching to a different session's drawer — clear the previous
+      // session's output so stale text is never shown against the new one.
+      const outputEl = document.getElementById('detail-output');
+      if (outputEl) outputEl.textContent = '';
+    }
     state.activeDetailId = sessionId;
     renderDetail(session);
     // reflect the active card highlight without a full grid rebuild
@@ -313,6 +324,15 @@
     drawer.querySelector('.detail-title').textContent = session.title || '(no summary yet)';
     drawer.querySelector('.detail-meta').textContent =
       `${session.projectName || session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
+
+    // No API currently supplies plan-step data. Rather than show a
+    // permanently-empty "Agent plan" box, hide the section entirely when
+    // there's nothing to show.
+    const planList = document.getElementById('detail-plan-list');
+    const planEyebrow = drawer.querySelector('.plan-eyebrow');
+    const hasPlan = !!(planList && planList.children.length > 0);
+    if (planList) planList.style.display = hasPlan ? '' : 'none';
+    if (planEyebrow) planEyebrow.style.display = hasPlan ? '' : 'none';
   }
 
   function updateOpenDetailIfPresent() {
@@ -336,16 +356,23 @@
       showToast('Type a message before sending.');
       return;
     }
-    const result = await guarded(
-      fetchJson(`/api/sessions/${state.activeDetailId}/message`, {
+    const outputEl = document.getElementById('detail-output');
+    if (outputEl) outputEl.textContent = 'Working…';
+
+    try {
+      const result = await fetchJson(`/api/sessions/${state.activeDetailId}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
-      }),
-      'Failed to send message to session'
-    );
-    if (result === null) return;
-    await loadSessions();
+      });
+      if (outputEl) outputEl.textContent = result.result || '(agent returned no output)';
+      await loadSessions();
+    } catch (err) {
+      const errorMessage = err && err.message ? err.message : 'Failed to send message to session';
+      console.error('Failed to send message to session', err);
+      showToast(errorMessage);
+      if (outputEl) outputEl.textContent = errorMessage;
+    }
   }
 
   // ---------- new-session directory picker + command bar ----------
@@ -434,6 +461,7 @@
       openNewSessionMenu();
       return;
     }
+    showToast('Starting session…', false);
     const result = await guarded(
       fetchJson('/api/sessions', {
         method: 'POST',
@@ -444,6 +472,7 @@
     );
     if (result === null) return;
     input.value = '';
+    showToast('Session started.', false);
     await Promise.all([loadSessions(), loadProjects(), loadRecentDirectories()]);
   }
 
@@ -539,10 +568,57 @@
     }
   }
 
+  // ---------- periodic refresh (sessions started outside the dashboard,
+  // e.g. from a terminal, produce no WebSocket event, so the grid needs to
+  // poll on its own or it goes stale forever) ----------
+
+  const REFRESH_INTERVAL_MS = 10000;
+  let refreshInFlight = false;
+  let refreshTimerId = null;
+
+  async function refreshData() {
+    if (refreshInFlight) return; // don't stack overlapping requests
+    refreshInFlight = true;
+    try {
+      // loadSessions/loadProjects use the existing incremental render paths,
+      // so the one-time card-in animation does not replay on poll.
+      await Promise.all([loadSessions(), loadProjects()]);
+    } finally {
+      refreshInFlight = false;
+    }
+  }
+
+  function startAutoRefresh() {
+    if (refreshTimerId) return;
+    refreshTimerId = setInterval(refreshData, REFRESH_INTERVAL_MS);
+  }
+
+  function stopAutoRefresh() {
+    if (refreshTimerId) {
+      clearInterval(refreshTimerId);
+      refreshTimerId = null;
+    }
+  }
+
+  function handleVisibilityChange() {
+    if (document.hidden) {
+      stopAutoRefresh();
+    } else {
+      startAutoRefresh();
+      refreshData();
+    }
+  }
+
   // ---------- header stats ----------
 
   function updateHeaderStats() {
-    const runningCount = state.sessions.filter((s) => s.isRunning).length;
+    const sessionRunningCount = state.sessions.filter((s) => s.isRunning).length;
+    // Dashboard-started runs are tracked under a synthetic id until the
+    // transcript file lands, so they never match a real session's id and
+    // never flip that session's isRunning to true. Fall back to the max
+    // with the server's live active-run count so those runs are still
+    // reflected here.
+    const runningCount = Math.max(sessionRunningCount, state.activeCount || 0);
     const runningEl = document.getElementById('running-count-value');
     if (runningEl) runningEl.textContent = String(runningCount);
 
@@ -644,5 +720,8 @@
     loadRecentDirectories();
     loadMemoryCommon();
     connectWebSocket();
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    if (!document.hidden) startAutoRefresh();
   });
 })();
