@@ -102,6 +102,144 @@ test('listSessions degrades gracefully when the registry file is malformed JSON'
   assert.strictEqual(sessions[0].pathResolved, false);
 });
 
+// ---------- Defect 1: title extraction from real transcripts ----------
+
+function writeSession(claudeHomeDir, projectFolder, sessionId, lines) {
+  const projectDir = path.join(claudeHomeDir, projectFolder);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, `${sessionId}.jsonl`),
+    lines.map((l) => JSON.stringify(l)).join('\n') + '\n',
+    'utf-8'
+  );
+}
+
+test('listSessions extracts a title from a real user message where isMeta is undefined (absent), not false', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  writeSession(claudeHomeDir, 'D--Unknown-Path', 'sess-1', [
+    { type: 'mode', mode: 'normal', sessionId: 'sess-1' },
+    {
+      type: 'user',
+      // isMeta intentionally absent, as in real transcripts.
+      message: { role: 'user', content: 'why is the checkout button disabled' },
+      sessionId: 'sess-1',
+    },
+  ]);
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions();
+  assert.strictEqual(sessions.length, 1);
+  assert.strictEqual(sessions[0].title, 'why is the checkout button disabled');
+});
+
+test('listSessions skips synthetic wrapper lines and uses the first real human prompt', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  writeSession(claudeHomeDir, 'D--Unknown-Path', 'sess-2', [
+    { type: 'mode', mode: 'normal', sessionId: 'sess-2' },
+    { type: 'user', message: { role: 'user', content: '<local-command-caveat>some caveat text</local-command-caveat>' }, sessionId: 'sess-2' },
+    { type: 'user', message: { role: 'user', content: '<command-name>/clear</command-name>' }, sessionId: 'sess-2' },
+    { type: 'user', message: { role: 'user', content: '<command-message>cleared</command-message>' }, sessionId: 'sess-2' },
+    { type: 'user', message: { role: 'user', content: '<command-args></command-args>' }, sessionId: 'sess-2' },
+    { type: 'user', message: { role: 'user', content: '<system-reminder>reminder text</system-reminder>' }, sessionId: 'sess-2' },
+    { type: 'user', message: { role: 'user', content: 'please fix the login bug' }, sessionId: 'sess-2' },
+  ]);
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions();
+  assert.strictEqual(sessions[0].title, 'please fix the login bug');
+});
+
+test('listSessions skips user lines whose message.content is an array (tool results)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  writeSession(claudeHomeDir, 'D--Unknown-Path', 'sess-3', [
+    { type: 'mode', mode: 'normal', sessionId: 'sess-3' },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'some tool output' }] }, sessionId: 'sess-3' },
+    { type: 'user', message: { role: 'user', content: 'the real question about deploys' }, sessionId: 'sess-3' },
+  ]);
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions();
+  assert.strictEqual(sessions[0].title, 'the real question about deploys');
+});
+
+test('listSessions collapses a long multi-line prompt to one line and truncates to <=120 chars', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  const longPrompt = 'first line of the prompt\n' + 'x'.repeat(150) + '\nlast line';
+  writeSession(claudeHomeDir, 'D--Unknown-Path', 'sess-4', [
+    { type: 'mode', mode: 'normal', sessionId: 'sess-4' },
+    { type: 'user', message: { role: 'user', content: longPrompt }, sessionId: 'sess-4' },
+  ]);
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions();
+  const title = sessions[0].title;
+  assert.ok(!title.includes('\n'), 'title should not contain newlines');
+  assert.ok(title.length <= 121, `title length ${title.length} should be <= 121 (120 + ellipsis)`);
+  assert.ok(title.endsWith('…'), 'truncated title should end with an ellipsis');
+  assert.strictEqual(title.slice(0, 25), 'first line of the prompt ');
+});
+
+// ---------- Defect 2: friendly projectName ----------
+
+test('listSessions and listProjects derive projectName as the final segment of a resolved path', () => {
+  const { claudeHomeDir, registryPath } = makeFixture();
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions();
+  const projects = store.listProjects();
+  assert.strictEqual(sessions[0].projectName, 'oarc-function-app');
+  assert.strictEqual(projects[0].projectName, 'oarc-function-app');
+});
+
+test('listSessions falls back to the raw projectFolder for projectName when the path did not resolve', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  const projectDir = path.join(claudeHomeDir, 'D--Unknown-Path');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'abc.jsonl'), JSON.stringify({ type: 'mode', sessionId: 'abc' }) + '\n', 'utf-8');
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions();
+  assert.strictEqual(sessions[0].pathResolved, false);
+  assert.strictEqual(sessions[0].projectName, 'D--Unknown-Path');
+});
+
+test('listSessions derives a sensible projectName for a drive-root-ish resolved path', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  const projectFolder = 'D--';
+  const projectDir = path.join(claudeHomeDir, projectFolder);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'root.jsonl'), JSON.stringify({ type: 'mode', sessionId: 'root' }) + '\n', 'utf-8');
+  fs.writeFileSync(registryPath, JSON.stringify({
+    projects: { 'D:\\': { lastSessionId: 'root' } },
+  }), 'utf-8');
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions();
+  assert.strictEqual(sessions[0].pathResolved, true);
+  assert.ok(sessions[0].projectName && sessions[0].projectName.length > 0, 'projectName should not be empty');
+  assert.strictEqual(sessions[0].projectName, 'D:');
+});
+
 test('listProjects counts multiple sessions and sorts projects by lastActivity descending', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
   const claudeHomeDir = path.join(root, 'projects');

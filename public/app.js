@@ -128,9 +128,20 @@
     card.querySelector('.card-time').textContent = formatRelativeTime(session.lastActivity);
     card.querySelector('.card-title').textContent = session.title || '(no summary yet)';
     card.querySelector('.card-meta-path').textContent =
-      `${session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
+      `${session.projectName || session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
 
     card.classList.toggle('card--active', session.id === state.activeDetailId);
+  }
+
+  // Currently-running sessions first, then most-recently-active first.
+  function sortedSessions() {
+    return [...state.sessions].sort((a, b) => {
+      const aRunning = a.isRunning ? 1 : 0;
+      const bRunning = b.isRunning ? 1 : 0;
+      if (aRunning !== bRunning) return bRunning - aRunning;
+      if (a.lastActivity === b.lastActivity) return 0;
+      return a.lastActivity < b.lastActivity ? 1 : -1;
+    });
   }
 
   function renderSessions() {
@@ -151,7 +162,7 @@
 
     const seen = new Set();
     let previousEl = null;
-    for (const session of state.sessions) {
+    for (const session of sortedSessions()) {
       const id = String(session.id);
       seen.add(id);
       let card = existingById.get(id);
@@ -191,7 +202,7 @@
         </div>
         <div class="dotnum row-count"></div>
       `;
-      row.querySelector('.project-row-name').textContent = project.projectFolder;
+      row.querySelector('.project-row-name').textContent = project.projectName || project.projectFolder;
       row.querySelector('.project-row-path').textContent = project.projectPath;
       row.querySelector('.row-count').textContent = String(project.sessionCount);
       list.appendChild(row);
@@ -301,7 +312,7 @@
 
     drawer.querySelector('.detail-title').textContent = session.title || '(no summary yet)';
     drawer.querySelector('.detail-meta').textContent =
-      `${session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
+      `${session.projectName || session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
   }
 
   function updateOpenDetailIfPresent() {
@@ -520,7 +531,7 @@
     for (const project of state.projects) {
       const option = document.createElement('option');
       option.value = project.projectPath;
-      option.textContent = project.projectFolder;
+      option.textContent = project.projectName || project.projectFolder;
       select.appendChild(option);
     }
     if (previous && state.projects.some((p) => p.projectPath === previous)) {

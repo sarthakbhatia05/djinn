@@ -6,6 +6,31 @@ const { encodeProjectPath } = require('./pathEncoding');
 
 const READ_HEAD_BYTES = 8192;
 
+// Synthetic wrapper lines (slash-command scaffolding, hook output, etc.) are
+// real type:'user' messages but make terrible titles. Skip anything whose
+// content opens with one of these tags.
+const WRAPPER_TAG_PREFIXES = [
+  '<local-command-caveat',
+  '<command-name',
+  '<command-message',
+  '<command-args',
+  '<system-reminder',
+  '<user-prompt-submit-hook',
+];
+
+const TITLE_MAX_LENGTH = 120;
+
+function isWrapperContent(content) {
+  const trimmed = content.trim();
+  return WRAPPER_TAG_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+}
+
+function normalizeTitle(content) {
+  const collapsed = content.trim().replace(/\s+/g, ' ');
+  if (collapsed.length <= TITLE_MAX_LENGTH) return collapsed;
+  return `${collapsed.slice(0, TITLE_MAX_LENGTH)}…`;
+}
+
 function readHead(filePath) {
   const fd = fs.openSync(filePath, 'r');
   try {
@@ -33,13 +58,27 @@ function parseHeadMeta(filePath) {
       continue;
     }
     if (!gitBranch && obj.gitBranch) gitBranch = obj.gitBranch;
-    if (!title && obj.type === 'user' && obj.isMeta === false && typeof obj.message?.content === 'string') {
-      title = obj.message.content;
+    if (!title && obj.type === 'user' && !obj.isMeta && typeof obj.message?.content === 'string') {
+      const content = obj.message.content;
+      if (!isWrapperContent(content)) {
+        title = normalizeTitle(content);
+      }
     }
     if (gitBranch && title) break;
   }
 
   return { gitBranch, title };
+}
+
+// Final path segment of a resolved project path, for use as a friendly
+// display name. Handles both '\' and '/' separators and trailing separators.
+// Falls back to the raw folder name when the path never resolved.
+function deriveProjectName(projectPath, projectFolder) {
+  if (!projectPath) return projectFolder;
+  const trimmed = projectPath.replace(/[\\/]+$/, '');
+  const segments = trimmed.split(/[\\/]/).filter(Boolean);
+  if (segments.length === 0) return projectPath || projectFolder;
+  return segments[segments.length - 1];
 }
 
 function createSessionStore({
@@ -86,10 +125,12 @@ function createSessionStore({
         const filePath = path.join(projectDir, file.name);
         const stat = fs.statSync(filePath);
         const { gitBranch, title } = parseHeadMeta(filePath);
+        const projectPath = resolved || projectFolder;
         sessions.push({
           id: file.name.replace(/\.jsonl$/, ''),
           projectFolder,
-          projectPath: resolved || projectFolder,
+          projectPath,
+          projectName: deriveProjectName(projectPath, projectFolder),
           pathResolved: resolved !== null,
           gitBranch,
           title,
@@ -110,6 +151,7 @@ function createSessionStore({
         byPath.set(s.projectPath, {
           projectPath: s.projectPath,
           projectFolder: s.projectFolder,
+          projectName: s.projectName,
           sessionCount: 1,
           lastActivity: s.lastActivity,
         });
