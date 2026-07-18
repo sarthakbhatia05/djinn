@@ -240,6 +240,92 @@ test('listSessions derives a sensible projectName for a drive-root-ish resolved 
   assert.strictEqual(sessions[0].projectName, 'D:');
 });
 
+// ---------- Scan budget + head-parse caching ----------
+
+test('listSessions resolves a title when the real prompt sits beyond 8KB but within the 64KB budget', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  // Pad the transcript with >8KB of wrapper/meta lines before the real prompt,
+  // mimicking hook-injected context pushing the first real user message deep
+  // into the file (the defect this budget increase fixes).
+  const paddingLines = [];
+  let paddingBytes = 0;
+  while (paddingBytes < 12 * 1024) {
+    const line = { type: 'user', isMeta: true, message: { role: 'user', content: `<system-reminder>padding ${paddingLines.length} ${'y'.repeat(80)}</system-reminder>` }, sessionId: 'sess-deep' };
+    const json = JSON.stringify(line);
+    paddingLines.push(line);
+    paddingBytes += json.length + 1;
+  }
+
+  writeSession(claudeHomeDir, 'D--Unknown-Path', 'sess-deep', [
+    { type: 'mode', mode: 'normal', sessionId: 'sess-deep' },
+    ...paddingLines,
+    { type: 'user', message: { role: 'user', content: 'the real prompt buried past 8KB' }, sessionId: 'sess-deep' },
+  ]);
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions();
+  assert.strictEqual(sessions.length, 1);
+  assert.strictEqual(sessions[0].title, 'the real prompt buried past 8KB');
+});
+
+test('listSessions caches head-parse results and invalidates when the file changes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  const projectFolder = 'D--Unknown-Path';
+  const sessionId = 'sess-cache';
+  writeSession(claudeHomeDir, projectFolder, sessionId, [
+    { type: 'mode', mode: 'normal', sessionId },
+    { type: 'user', message: { role: 'user', content: 'original title text' }, sessionId },
+  ]);
+
+  const filePath = path.join(claudeHomeDir, projectFolder, `${sessionId}.jsonl`);
+  const originalStatSync = fs.statSync;
+  let statCallsForFile = 0;
+  fs.statSync = function patchedStatSync(p, ...rest) {
+    if (p === filePath) statCallsForFile += 1;
+    return originalStatSync.call(fs, p, ...rest);
+  };
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  try {
+    const first = store.listSessions();
+    assert.strictEqual(first[0].title, 'original title text');
+
+    const readSyncBefore = fs.readSync;
+    let readSyncCalls = 0;
+    fs.readSync = function patchedReadSync(...args) {
+      readSyncCalls += 1;
+      return readSyncBefore.apply(fs, args);
+    };
+    const second = store.listSessions();
+    fs.readSync = readSyncBefore;
+
+    assert.strictEqual(second[0].title, 'original title text');
+    assert.strictEqual(readSyncCalls, 0, 'cached entry should skip re-reading the file when mtime/size are unchanged');
+
+    // Mutate the file's content and force a later mtime so the cache must invalidate.
+    const newLines = [
+      JSON.stringify({ type: 'mode', mode: 'normal', sessionId }),
+      JSON.stringify({ type: 'user', message: { role: 'user', content: 'updated title text' }, sessionId }),
+    ];
+    fs.writeFileSync(filePath, newLines.join('\n') + '\n', 'utf-8');
+    const future = new Date(Date.now() + 5000);
+    fs.utimesSync(filePath, future, future);
+
+    const third = store.listSessions();
+    assert.strictEqual(third[0].title, 'updated title text', 'cache should invalidate and reflect new content after mtime/size change');
+  } finally {
+    fs.statSync = originalStatSync;
+  }
+});
+
 test('listProjects counts multiple sessions and sorts projects by lastActivity descending', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
   const claudeHomeDir = path.join(root, 'projects');

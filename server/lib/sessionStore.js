@@ -4,7 +4,15 @@ const path = require('path');
 const { readJson } = require('./jsonStore');
 const { encodeProjectPath } = require('./pathEncoding');
 
-const READ_HEAD_BYTES = 8192;
+// How far into a transcript we scan looking for the first real user prompt
+// (used for the session title) and gitBranch. Measured across all 162 real
+// transcripts on this machine: byte offset of the first real user prompt is
+// p50=10.5KB, p75=16.2KB, p90=16.6KB, p95=17.8KB, p99=25.2KB, max=52.9KB.
+// 8KB only resolved 12/162 titles; 64KB resolves 145/162 (the ceiling — the
+// other 17 transcripts have no real user prompt at all). Budgets above 64KB
+// (128KB/256KB/512KB) resolve no additional titles, so do not raise this
+// further without new evidence.
+const READ_HEAD_BYTES = 65536;
 
 // Synthetic wrapper lines (slash-command scaffolding, hook output, etc.) are
 // real type:'user' messages but make terrible titles. Skip anything whose
@@ -70,6 +78,29 @@ function parseHeadMeta(filePath) {
   return { gitBranch, title };
 }
 
+// Module-level cache of head-parse results, keyed on absolute file path.
+// listSessions() runs on every /api/sessions request (page load + every WS
+// status push), and re-reading up to 64KB per transcript each time is
+// wasteful once a session's early lines have stopped changing (which is true
+// for the vast majority of the file's lifetime — only the tail grows as the
+// conversation continues). Cache entries are invalidated by comparing the
+// current stat's mtimeMs and size against the cached ones; a mismatch means
+// the file changed and must be re-read. No TTL/eviction: one small object per
+// transcript file is negligible at this scale, and the cache lives for the
+// server process's lifetime. Keyed on absolute file path, so distinct store
+// instances (e.g. different fixture dirs in tests) can never collide.
+const headMetaCache = new Map();
+
+function getHeadMeta(filePath, stat) {
+  const cached = headMetaCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.meta;
+  }
+  const meta = parseHeadMeta(filePath);
+  headMetaCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, meta });
+  return meta;
+}
+
 // Final path segment of a resolved project path, for use as a friendly
 // display name. Handles both '\' and '/' separators and trailing separators.
 // Falls back to the raw folder name when the path never resolved.
@@ -124,7 +155,7 @@ function createSessionStore({
       for (const file of files) {
         const filePath = path.join(projectDir, file.name);
         const stat = fs.statSync(filePath);
-        const { gitBranch, title } = parseHeadMeta(filePath);
+        const { gitBranch, title } = getHeadMeta(filePath, stat);
         const projectPath = resolved || projectFolder;
         sessions.push({
           id: file.name.replace(/\.jsonl$/, ''),
