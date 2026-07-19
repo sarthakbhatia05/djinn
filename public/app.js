@@ -1024,10 +1024,14 @@
 
   function mainViewSections() {
     return [
+      document.querySelector('.hero-orb-wrap'),
       document.querySelector('.command-bar'),
       document.querySelector('.section-header'),
-      document.querySelector('.sessions-eyebrow'),
+      // The whole controls row, not just its eyebrow: the sort and filter
+      // buttons live in here too and have no meaning in the Memory view.
+      document.querySelector('.sessions-controls'),
       document.getElementById('session-grid'),
+      document.getElementById('session-more-row'),
       document.querySelector('.section-label-row'),
       document.querySelector('.backlog-add-row'),
       document.getElementById('backlog-list'),
@@ -1036,6 +1040,9 @@
 
   function showSessionsView() {
     for (const el of mainViewSections()) el.style.display = '';
+    // The Load more row owns its own display (it's hidden once everything is
+    // shown), so blanket-restoring above would resurrect a stale button.
+    renderSessionControls();
     document.getElementById('memory-panel').style.display = 'none';
     document.getElementById('all-sessions-row').classList.add('row--active');
     document.getElementById('memory-row').classList.remove('row--active');
@@ -1273,15 +1280,21 @@
     // Sprites shrink and dim as the cloud gets denser, so a hero orb reads as
     // fine grain rather than as a saturated blob.
     const spriteScale = size * (0.052 - 0.030 * o.density) * burstScale;
-    // Light theme runs dimmer: additive overlaps sum toward white, and white on
-    // a cream page is invisible. Keeping each grain fainter means dense regions
-    // land on saturated terracotta instead of clipping out to nothing.
-    const alphaScale = (1.05 - 0.40 * o.density) * (active ? 1.35 : 1) * (bgIsLight ? 0.6 : 1);
+    const alphaScale = (1.05 - 0.40 * o.density) * (active ? 1.35 : 1) * (bgIsLight ? 0.95 : 1);
 
-    // No depth sort. Additive blending is commutative, so draw order cannot
-    // change the result — sorting ~2600 particles per frame would cost real
-    // time and buy exactly nothing. Please don't "fix" this.
-    ctx.globalCompositeOperation = 'lighter';
+    // Blend mode has to follow the backdrop. 'lighter' is what turns the dark
+    // theme's cloud into something that glows — overlapping grains sum toward
+    // incandescence. On the cream light theme it does the opposite of what we
+    // want: there is almost no headroom above #f6f5f0 to add to, so grains
+    // vanish individually and dense regions clip out to a flat white disc.
+    // Normal compositing there lets terracotta grains *darken* the page, so
+    // density reads as saturation instead of as blowout.
+    //
+    // No depth sort in either mode. Additive is commutative so order provably
+    // cannot matter; normal compositing is order-dependent in principle, but
+    // every grain is a translucent scrap of the same two warm colours, so the
+    // difference is invisible and not worth sorting thousands of points a frame.
+    ctx.globalCompositeOperation = bgIsLight ? 'source-over' : 'lighter';
 
     for (const p of o.particles) {
       // rotate around the vertical axis…
@@ -1304,8 +1317,16 @@
       // one-pixel ring that looks like a stroked circle, not a lit edge.
       const rim = Math.pow(rr, 5) * (1 - Math.abs(z2) * 0.55);
 
-      let alpha = (0.12 + 0.88 * depth * depth) * p.gain * alphaScale;
-      alpha += rim * 0.5 * p.gain;
+      // Depth falloff is gentle on purpose. Squaring it emptied the body of the
+      // cloud, and combined with the rim boost below the orb read as a hollow
+      // ring rather than a sphere — the interior has to carry real weight for
+      // the rim to look like a lit edge instead of a stroked circle.
+      // Projecting an even shell already piles particles up at the silhouette,
+      // so the rim term is a small accent on top of that geometry, not the
+      // source of it. Measured radially, an interior:limb alpha ratio near 1:3
+      // reads as a hollow ring; keeping it closer to 1:1.6 reads as a sphere.
+      let alpha = (0.42 + 0.58 * Math.pow(depth, 1.5)) * p.gain * alphaScale;
+      alpha += rim * 0.10 * p.gain;
       if (animate) alpha *= 0.74 + 0.26 * Math.sin(seconds * p.twinkleSpeed + p.twinklePhase);
       if (alpha < 0.012) continue; // fully-dim band troughs aren't worth a blit
       if (alpha > 1) alpha = 1;
