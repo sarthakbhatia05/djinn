@@ -9,6 +9,8 @@
     selectedDirectory: null,
     activeCount: 0,
     settings: null,
+    drawerSize: readDrawerSize(), // function declarations hoist, so this is fine
+    drawerMinimized: false,
   };
 
   // ---------- assistant identity + tracked projects ----------
@@ -366,6 +368,9 @@
   function renderDetail(session) {
     const drawer = document.getElementById('detail-drawer');
     drawer.style.display = 'flex';
+    // Opening a session always un-minimizes; the persisted width is restored.
+    state.drawerMinimized = false;
+    applyDrawerSize();
     const status = statusOf(session);
 
     const dot = document.getElementById('detail-status-dot');
@@ -441,6 +446,58 @@
     }
   }
 
+  // ---------- drawer sizing ----------
+  //
+  // Width cycles normal → wide → full and persists, because a preference for
+  // reading long transcripts wide shouldn't have to be re-set every reload.
+  // Minimize is deliberately NOT persisted: reopening a session you asked to
+  // see, only to get a collapsed strip, would read as a bug.
+
+  const DRAWER_SIZES = ['normal', 'wide', 'full'];
+  const DRAWER_SIZE_KEY = 'djinn.drawerSize';
+
+  function readDrawerSize() {
+    try {
+      const saved = localStorage.getItem(DRAWER_SIZE_KEY);
+      return DRAWER_SIZES.includes(saved) ? saved : 'normal';
+    } catch {
+      return 'normal'; // private mode / storage disabled
+    }
+  }
+
+  function applyDrawerSize() {
+    const drawer = document.getElementById('detail-drawer');
+    if (!drawer) return;
+    drawer.classList.toggle('drawer--wide', state.drawerSize === 'wide');
+    drawer.classList.toggle('drawer--full', state.drawerSize === 'full');
+    drawer.classList.toggle('drawer--min', state.drawerMinimized);
+
+    const sizeBtn = document.getElementById('detail-size-btn');
+    if (sizeBtn) {
+      sizeBtn.textContent = state.drawerSize === 'full' ? '⤡' : '⤢';
+      sizeBtn.title = state.drawerSize === 'full' ? 'Back to normal width' : 'Widen the panel';
+    }
+    const minBtn = document.getElementById('detail-minimize-btn');
+    if (minBtn) {
+      minBtn.textContent = state.drawerMinimized ? '□' : '—';
+      minBtn.title = state.drawerMinimized ? 'Restore' : 'Minimize';
+    }
+  }
+
+  function cycleDrawerSize() {
+    const next = (DRAWER_SIZES.indexOf(state.drawerSize) + 1) % DRAWER_SIZES.length;
+    state.drawerSize = DRAWER_SIZES[next];
+    // Widening a minimized drawer should show you the result, not stay collapsed.
+    state.drawerMinimized = false;
+    try { localStorage.setItem(DRAWER_SIZE_KEY, state.drawerSize); } catch { /* non-fatal */ }
+    applyDrawerSize();
+  }
+
+  function toggleDrawerMinimized() {
+    state.drawerMinimized = !state.drawerMinimized;
+    applyDrawerSize();
+  }
+
   async function sendDetailMessage(message) {
     if (!state.activeDetailId) return;
     if (!message || !message.trim()) {
@@ -476,37 +533,83 @@
     return state.selectedDirectory || state.recentDirs[0] || (state.projects[0] && state.projects[0].projectPath) || null;
   }
 
+  // The same picker is offered in two places — the header's "+ New session"
+  // button and the command bar's directory chip — so both menus are driven
+  // from one list of directories and one selection function.
+  const DIR_MENUS = [
+    { menu: 'new-session-menu', list: 'recent-directories-list' },
+    { menu: 'command-dir-menu', list: 'command-recent-directories-list' },
+  ];
+
+  function basenameOf(dirPath) {
+    // Paths arrive with either separator depending on where they were recorded.
+    const parts = String(dirPath).replace(/[\\/]+$/, '').split(/[\\/]/);
+    return parts[parts.length - 1] || dirPath;
+  }
+
   function updateCommandBarHint() {
     const hint = document.querySelector('.command-bar-hint-text');
-    if (!hint) return;
+    if (hint) {
+      hint.textContent = `issue a command — ${assistantName()} will run it in the directory you choose`;
+    }
+    updateDirChip();
+  }
+
+  function updateDirChip() {
+    const name = document.getElementById('command-dir-chip-name');
+    const chip = document.getElementById('command-dir-chip');
+    if (!name || !chip) return;
     const dir = currentTargetDirectory();
-    hint.textContent = dir
-      ? `issue a command — ${assistantName()} will run it in: ${dir}`
-      : `issue a command — pick a directory with "+ New session" first`;
+    // The chip shows the folder name so it stays readable; the full path is
+    // still one hover away, because two repos can share a basename.
+    name.textContent = dir ? basenameOf(dir) : 'choose a directory';
+    chip.title = dir ? dir : 'Choose which directory the agent runs in';
+    chip.classList.toggle('dir-chip--empty', !dir);
   }
 
-  function openNewSessionMenu() {
-    document.getElementById('new-session-menu').hidden = false;
+  function closeDirectoryMenus() {
+    for (const { menu } of DIR_MENUS) {
+      const el = document.getElementById(menu);
+      if (el) el.hidden = true;
+    }
   }
 
-  function closeNewSessionMenu() {
-    document.getElementById('new-session-menu').hidden = true;
-  }
-
-  function toggleNewSessionMenu() {
-    const menu = document.getElementById('new-session-menu');
-    menu.hidden = !menu.hidden;
+  function toggleDirectoryMenu(menuId) {
+    const menu = document.getElementById(menuId);
+    if (!menu) return;
+    const wasHidden = menu.hidden;
+    closeDirectoryMenus();
+    menu.hidden = !wasHidden;
   }
 
   function selectDirectory(dir) {
     state.selectedDirectory = dir;
     updateCommandBarHint();
-    closeNewSessionMenu();
-    // reflect selection in the recent-directories list
-    const list = document.getElementById('recent-directories-list');
-    for (const item of list.children) {
-      const isSelected = item.dataset.dir === dir;
-      item.style.background = isSelected ? 'var(--accent-soft)' : '';
+    closeDirectoryMenus();
+    highlightSelectedDirectory(dir);
+  }
+
+  function highlightSelectedDirectory(dir) {
+    for (const { list } of DIR_MENUS) {
+      const el = document.getElementById(list);
+      if (!el) continue;
+      for (const item of el.children) {
+        item.style.background = item.dataset.dir === dir ? 'var(--accent-soft)' : '';
+      }
+    }
+  }
+
+  function renderDirectoryList(listEl) {
+    listEl.textContent = '';
+    for (const dir of state.recentDirs) {
+      const item = document.createElement('div');
+      item.className = 'menu-item';
+      item.dataset.dir = dir;
+      // Static markup only — the path itself goes in via textContent below.
+      item.innerHTML = `<span class="status-dot dir-status-dot"></span><span class="dir-path mono"></span>`;
+      item.querySelector('.dir-path').textContent = dir;
+      item.addEventListener('click', () => selectDirectory(dir));
+      listEl.appendChild(item);
     }
   }
 
@@ -514,17 +617,11 @@
     const dirs = await guarded(fetchJson('/api/directories/recent'), 'Failed to load recent directories');
     if (dirs === null) return;
     state.recentDirs = dirs;
-    const list = document.getElementById('recent-directories-list');
-    list.innerHTML = '';
-    for (const dir of dirs) {
-      const item = document.createElement('div');
-      item.className = 'menu-item';
-      item.dataset.dir = dir;
-      item.innerHTML = `<span class="status-dot dir-status-dot"></span><span class="dir-path mono"></span>`;
-      item.querySelector('.dir-path').textContent = dir;
-      item.addEventListener('click', () => selectDirectory(dir));
-      list.appendChild(item);
+    for (const { list } of DIR_MENUS) {
+      const el = document.getElementById(list);
+      if (el) renderDirectoryList(el);
     }
+    highlightSelectedDirectory(currentTargetDirectory());
     updateCommandBarHint();
   }
 
@@ -552,8 +649,8 @@
       return;
     }
     if (!cwd) {
-      showToast('Pick a directory first — click "+ New session" and choose one.');
-      openNewSessionMenu();
+      showToast('Pick a directory first — use the folder chip next to the command box.');
+      toggleDirectoryMenu('command-dir-menu');
       return;
     }
     showToast(`${assistantName()} is on it…`, false);
@@ -1190,21 +1287,27 @@
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('new-session-btn').addEventListener('click', (e) => {
       e.stopPropagation();
-      toggleNewSessionMenu();
+      toggleDirectoryMenu('new-session-menu');
+    });
+    document.getElementById('command-dir-chip').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleDirectoryMenu('command-dir-menu');
     });
     document.addEventListener('click', (e) => {
-      const wrap = document.querySelector('.new-session-wrap');
-      if (wrap && !wrap.contains(e.target)) closeNewSessionMenu();
+      // Close the pickers on any click outside of either of their anchors.
+      const inAnchor = e.target.closest('.new-session-wrap, .dir-chip-wrap');
+      if (!inAnchor) closeDirectoryMenus();
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        closeNewSessionMenu();
+        closeDirectoryMenus();
         closeProjectsModal();
         closeDetail();
       }
     });
 
     document.getElementById('browse-directory-btn').addEventListener('click', browseForDirectory);
+    document.getElementById('command-browse-directory-btn').addEventListener('click', browseForDirectory);
     document.getElementById('command-send-btn').addEventListener('click', () => {
       startNewSession(currentTargetDirectory());
     });
@@ -1262,6 +1365,12 @@
     document.getElementById('header-assistant-name').addEventListener('click', startHeaderRename);
 
     document.getElementById('detail-close-btn').addEventListener('click', closeDetail);
+    document.getElementById('detail-size-btn').addEventListener('click', cycleDrawerSize);
+    document.getElementById('detail-minimize-btn').addEventListener('click', toggleDrawerMinimized);
+    // A minimized drawer is mostly header, so let the header itself restore it.
+    document.querySelector('#detail-drawer .drawer-header').addEventListener('click', (e) => {
+      if (state.drawerMinimized && !e.target.closest('.drawer-controls')) toggleDrawerMinimized();
+    });
     const detailInput = document.querySelector('#detail-drawer .detail-send-input');
     const detailSendBtn = document.querySelector('#detail-drawer .detail-send-btn');
     detailSendBtn.addEventListener('click', () => {

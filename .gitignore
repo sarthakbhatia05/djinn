@@ -3,3 +3,4 @@ data/
 *.tmp
 .superpowers/
 .claude/settings.local.json
+.claude/worktrees/

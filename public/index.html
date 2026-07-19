@@ -94,6 +94,28 @@
             <div class="eyebrow command-bar-hint-text">issue a command — I'll route it to an agent, in the directory you choose</div>
           </div>
           <div class="command-input-row">
+            <div class="dir-chip-wrap">
+              <button class="dir-chip" id="command-dir-chip" type="button" title="Choose which directory the agent runs in">
+                <span class="status-dot dir-status-dot"></span>
+                <span class="mono dir-chip-name" id="command-dir-chip-name">no directory</span>
+                <span class="dir-chip-caret">▾</span>
+              </button>
+
+              <div class="dropdown-menu dropdown-menu--chip" id="command-dir-menu" hidden>
+                <div class="dropdown-header">
+                  <div class="eyebrow">Run agent in…</div>
+                </div>
+                <div class="dropdown-body">
+                  <div class="eyebrow dropdown-section-label">Recent directories</div>
+                  <div id="command-recent-directories-list"></div>
+                  <div class="menu-divider"></div>
+                  <div class="menu-item menu-item--browse" id="command-browse-directory-btn">
+                    <span class="icon">＋</span>
+                    <div class="label">Browse for a different directory…</div>
+                  </div>
+                </div>
+              </div>
+            </div>
             <input class="mono command-input" id="command-input" placeholder="research the billing webhook failures and propose a fix">
             <button class="btn dotnum command-send-btn" id="command-send-btn">Send</button>
           </div>
@@ -157,7 +179,11 @@
             <div class="detail-title" id="detail-title"></div>
             <div class="mono detail-meta" id="detail-meta"></div>
           </div>
-          <div class="ghost drawer-close" id="detail-close-btn">×</div>
+          <div class="drawer-controls">
+            <div class="ghost drawer-ctl" id="detail-minimize-btn" title="Minimize">—</div>
+            <div class="ghost drawer-ctl" id="detail-size-btn" title="Widen the panel">⤢</div>
+            <div class="ghost drawer-close" id="detail-close-btn" title="Close">×</div>
+          </div>
         </div>
 
         <div class="drawer-body chat-body" id="chat-history"></div>

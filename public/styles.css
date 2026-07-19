@@ -216,6 +216,36 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   z-index: 5;
 }
 .dropdown-menu[hidden] { display: none; }
+/* The command bar's copy of the menu hangs off the chip on the left, unlike
+   the header's, which is right-aligned under the "+ New session" button. */
+.dropdown-menu--chip { right: auto; left: 0; }
+
+/* ---------- command-bar directory chip ----------
+   The target directory used to be passive hint text, so it was easy to fire an
+   agent into the wrong repo without noticing. This makes it a real control. */
+.dir-chip-wrap { position: relative; flex-shrink: 0; }
+.dir-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.dir-chip:hover { border-color: var(--accent); color: var(--text); }
+.dir-chip-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dir-chip-caret { color: var(--text-faint); font-size: 9px; }
+.dir-chip--empty { border-color: var(--accent); color: var(--accent); }
 .dropdown-header {
   padding: 11px 14px 9px;
   border-bottom: 1px solid var(--border-soft);
@@ -636,8 +666,56 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 }
 .drawer-body {
   flex: 1;
+  /* Without this the flex default of min-height:auto refuses to shrink the
+     body below its content, so a long transcript grows the drawer past the
+     viewport and gets clipped by .drawer's overflow:hidden instead of
+     scrolling. This one line is what gives the chat a real scrollbar. */
+  min-height: 0;
   overflow-y: auto;
   padding: 16px 17px;
+}
+
+/* ---------- drawer sizing ----------
+   The size button cycles width through normal → wide → full. Full works by
+   letting the drawer take the whole row: .main-content is flex:1 with
+   min-width:0, so it collapses to zero rather than overflowing. Minimize is
+   an independent toggle that hides everything but the header and lets the
+   drawer shrink to that height, leaving a small card in the corner. */
+.drawer-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.drawer-ctl {
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.drawer-ctl:hover,
+.drawer-close:hover { color: var(--text); background: var(--surface-2); }
+
+.drawer { transition: width 160ms ease; }
+.drawer--wide { width: 60%; }
+.drawer--full { width: 100%; }
+
+.drawer--min { align-self: flex-start; width: 360px; }
+.drawer--min .drawer-body,
+.drawer--min .chat-working,
+.drawer--min .drawer-footer { display: none; }
+.drawer--min .drawer-header { border-bottom: none; }
+.drawer--min .detail-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 250px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer { transition: none; }
 }
 .plan-eyebrow {
   margin-bottom: 10px;
