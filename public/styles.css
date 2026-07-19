@@ -97,7 +97,12 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 
 .app-shell {
   width: 100%;
-  min-height: calc(100vh - 33px);
+  /* height, not min-height: with min-height the shell grows to fit its tallest
+     child, so a long chat transcript stretched the whole app to ~9000px and the
+     drawer never got a scrollbar. The shell is meant to be exactly one viewport
+     with its panes scrolling internally, which is what overflow:hidden here and
+     overflow-y:auto on .main-content assume. */
+  height: calc(100vh - 33px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -371,6 +376,9 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .main {
   flex: 1;
   min-width: 0;
+  /* Same flex trap as .drawer-body: without this the default min-height:auto
+     stops .main shrinking below its content and the bound is lost again. */
+  min-height: 0;
   display: flex;
   overflow: hidden;
 }
@@ -698,9 +706,13 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .drawer-ctl:hover,
 .drawer-close:hover { color: var(--text); background: var(--surface-2); }
 
-.drawer { transition: width 160ms ease; }
+/* Deliberately not transitioned. Animating width on a flex item reflows the
+   sibling .main-content — and its whole session grid — on every frame, which
+   is both expensive and unreliable; the transition was observed sticking at
+   currentTime 0 and pinning the drawer at its start width. Resizing is instant. */
 .drawer--wide { width: 60%; }
 .drawer--full { width: 100%; }
+.main--drawer-full .main-content { display: none; }
 
 .drawer--min { align-self: flex-start; width: 360px; }
 .drawer--min .drawer-body,
@@ -712,10 +724,6 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 250px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .drawer { transition: none; }
 }
 .plan-eyebrow {
   margin-bottom: 10px;

@@ -441,6 +441,10 @@
     state.activeDetailId = null;
     const drawer = document.getElementById('detail-drawer');
     drawer.style.display = 'none';
+    // Closing a full-width drawer must give the main column back, or the
+    // dashboard stays hidden behind a drawer that is no longer there.
+    const main = document.querySelector('.main');
+    if (main) main.classList.remove('main--drawer-full');
     for (const child of document.getElementById('session-grid').children) {
       if (child.dataset) child.classList.remove('card--active');
     }
@@ -471,6 +475,13 @@
     drawer.classList.toggle('drawer--wide', state.drawerSize === 'wide');
     drawer.classList.toggle('drawer--full', state.drawerSize === 'full');
     drawer.classList.toggle('drawer--min', state.drawerMinimized);
+
+    // At full width .main-content still contributes its horizontal padding, so
+    // a sliver of it survives beside the drawer. Take it out of flow instead.
+    const main = document.querySelector('.main');
+    if (main) {
+      main.classList.toggle('main--drawer-full', state.drawerSize === 'full' && !state.drawerMinimized);
+    }
 
     const sizeBtn = document.getElementById('detail-size-btn');
     if (sizeBtn) {
