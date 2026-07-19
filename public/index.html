@@ -132,8 +132,23 @@
           <div class="mono section-header-sub" id="section-header-sub">0 agents active across 0 repos</div>
         </div>
 
-        <div class="eyebrow sessions-eyebrow">Running &amp; recent sessions</div>
+        <div class="sessions-controls">
+          <div class="eyebrow sessions-eyebrow">Running &amp; recent sessions</div>
+          <div class="sessions-controls-actions">
+            <div class="session-filter" id="session-filter">
+              <button class="btn dotnum session-filter-btn" id="session-filter-btn">Projects: All</button>
+              <div class="session-filter-menu" id="session-filter-menu" style="display:none">
+                <div class="session-filter-options" id="session-filter-options"></div>
+                <button class="btn dotnum session-filter-reset" id="session-filter-reset">Show all projects</button>
+              </div>
+            </div>
+            <button class="btn dotnum session-sort-btn" id="session-sort-btn">Newest first</button>
+          </div>
+        </div>
         <div class="session-grid" id="session-grid"></div>
+        <div class="session-more-row" id="session-more-row" style="display:none">
+          <button class="btn dotnum session-more-btn" id="session-more-btn">Load more</button>
+        </div>
 
         <div class="section-label-row">
           <div class="eyebrow">Backlog</div>
@@ -253,6 +268,7 @@
 </div>
 
 <script src="/format.js"></script>
+<script src="/sessionSelect.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
