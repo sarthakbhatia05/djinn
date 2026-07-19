@@ -1056,9 +1056,23 @@
   // frame. Depth drives size and opacity, so the cloud visibly turns in 3D.
   // `.orb--active` (any session running) speeds the spin and brightens the
   // cloud; `.orb--burst` (naming celebration) fires a one-shot expansion.
+  //
+  // The look comes from three things working together, none of which is
+  // optional if you want it to read as a nebula rather than as scattered dots:
+  //   1. Density. Particle count scales with the rendered size, so a 120px
+  //      hero is a genuinely dense cloud instead of a 26px bead's worth of
+  //      points stretched thin.
+  //   2. Additive bloom. Every particle is one `drawImage` of a single
+  //      pre-rendered radial-gradient sprite under `globalCompositeOperation
+  //      = 'lighter'`. Overlapping sprites sum into glow. Building a gradient
+  //      per particle per frame would be ~2600 allocations a frame; don't.
+  //   3. Banding. A low-frequency swirl over the sphere's spherical coords
+  //      modulates brightness and size, so the shell has visible structure
+  //      rather than uniform (and therefore noisy-looking) coverage.
 
   const orbRenderers = [];
   let orbPalette = null;
+  let orbSprites = null;
 
   function hexToRgb(hex) {
     const h = hex.replace('#', '');
@@ -1071,13 +1085,25 @@
     if (orbPalette) return orbPalette;
     const accentValue = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#d97757';
     const accent = accentValue.startsWith('#') ? hexToRgb(accentValue) : { r: 217, g: 119, b: 87 };
-    // near-white warm tint for the front-most particles
-    const bright = {
-      r: Math.round(accent.r + (255 - accent.r) * 0.65),
-      g: Math.round(accent.g + (255 - accent.g) * 0.6),
-      b: Math.round(accent.b + (255 - accent.b) * 0.55),
-    };
-    orbPalette = { accent, bright };
+
+    // Which way "brighter" points depends on the backdrop. Additive blending
+    // only ever adds light, so on the near-black dark theme the highlight is a
+    // near-white warm tint and reads as incandescence. On the cream light
+    // theme that same tint lands within a few percent of the page colour and
+    // the whole cloud disappears — there, "brighter" has to mean *deeper and
+    // more saturated* instead. Both stay firmly terracotta; never go cool.
+    const bgValue = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+    const bg = bgValue.startsWith('#') ? hexToRgb(bgValue) : { r: 10, g: 10, b: 9 };
+    const bgIsLight = (bg.r * 0.299 + bg.g * 0.587 + bg.b * 0.114) > 140;
+
+    const bright = bgIsLight
+      ? { r: Math.round(accent.r * 0.72), g: Math.round(accent.g * 0.5), b: Math.round(accent.b * 0.42) }
+      : {
+        r: Math.round(accent.r + (255 - accent.r) * 0.65),
+        g: Math.round(accent.g + (255 - accent.g) * 0.6),
+        b: Math.round(accent.b + (255 - accent.b) * 0.55),
+      };
+    orbPalette = { accent, bright, bgIsLight };
     return orbPalette;
   }
 
@@ -1085,30 +1111,98 @@
     return `rgba(${c.r},${c.g},${c.b},${a})`;
   }
 
-  function makeOrbRenderer(container) {
-    const canvas = document.createElement('canvas');
-    container.appendChild(canvas);
+  const ORB_SPRITE_PX = 32;
+
+  // One sprite per palette colour, built once and reused by every orb at every
+  // size (drawImage scales it per particle). Rebuilt only when the theme flip
+  // invalidates the palette.
+  function makeOrbSprite(color) {
+    const c = document.createElement('canvas');
+    c.width = ORB_SPRITE_PX;
+    c.height = ORB_SPRITE_PX;
+    const g = c.getContext('2d');
+    const mid = ORB_SPRITE_PX / 2;
+    const grad = g.createRadialGradient(mid, mid, 0, mid, mid, mid);
+    // Steep falloff: a tight hot core with a wide, very faint halo. The halo is
+    // what sums into bloom where particles overlap; a linear ramp just makes
+    // uniform mush.
+    grad.addColorStop(0, rgba(color, 1));
+    grad.addColorStop(0.18, rgba(color, 0.62));
+    grad.addColorStop(0.45, rgba(color, 0.16));
+    grad.addColorStop(1, rgba(color, 0));
+    g.fillStyle = grad;
+    g.fillRect(0, 0, ORB_SPRITE_PX, ORB_SPRITE_PX);
+    return c;
+  }
+
+  function getOrbSprites() {
+    if (orbSprites) return orbSprites;
+    const { accent, bright } = getOrbPalette();
+    orbSprites = { accent: makeOrbSprite(accent), bright: makeOrbSprite(bright) };
+    return orbSprites;
+  }
+
+  // ~350 particles for the 26px header bead up to ~2600 for a 120px hero.
+  // Scaling off the container's CSS size (not the backing-store size) keeps
+  // the cost proportional to how much of the cloud anyone can actually see.
+  function orbParticleCount(cssSize) {
+    return Math.round(Math.max(300, Math.min(3000, 350 + (cssSize - 26) * 24)));
+  }
+
+  // Built lazily on the first frame the orb is actually visible, not at
+  // construction: the onboarding orbs live inside `[hidden]` steps, where
+  // offsetWidth is 0 and getComputedStyle reports `auto`, so sizing them up
+  // front would silently give a 64px orb a 26px orb's particle budget.
+  function buildOrbParticles(o, cssSize) {
+    const count = orbParticleCount(cssSize);
+    // 0 at bead size, 1 at hero size. Drives sprite scale and per-particle
+    // alpha: a dense cloud needs smaller, fainter grains or the additive
+    // blending saturates to a flat white disc.
+    o.density = Math.max(0, Math.min(1, (cssSize - 26) / 94));
+
     const particles = [];
-    const count = 230;
     const golden = Math.PI * (3 - Math.sqrt(5));
     for (let i = 0; i < count; i += 1) {
       const y = 1 - (i / (count - 1)) * 2;
       const rad = Math.sqrt(Math.max(0, 1 - y * y));
       const theta = golden * i;
+      // A few percent of radial jitter gives the shell thickness. Without it
+      // the cloud is a perfect mathematical surface, which reads as a wireframe.
+      const r = 1 + (Math.random() - 0.5) * 0.11;
+
+      // Low-frequency swirl over (polar angle, azimuth). The two terms beat
+      // against each other into diagonal density bands that sweep past as the
+      // sphere turns — the single biggest reason this reads as structure
+      // rather than as noise.
+      const polar = Math.acos(Math.max(-1, Math.min(1, y)));
+      const band = Math.sin(polar * 4.1 + theta * 0.9) * 0.5 + 0.5;
+      const spark = Math.random() < 0.08;
+
       particles.push({
-        x: Math.cos(theta) * rad,
-        y,
-        z: Math.sin(theta) * rad,
+        x: Math.cos(theta) * rad * r,
+        y: y * r,
+        z: Math.sin(theta) * rad * r,
+        // pow sharpens the bands: the troughs go genuinely dim instead of
+        // merely dimmer, which is what makes the ridges visible.
+        gain: (0.28 + 0.72 * Math.pow(band, 1.7)) * (spark ? 2.3 : 1),
+        sizeJitter: (0.6 + Math.random() * 0.85) * (spark ? 1.35 : 1),
         twinkleSpeed: 0.6 + Math.random() * 2.2,
         twinklePhase: Math.random() * Math.PI * 2,
-        sizeJitter: 0.55 + Math.random() * 1.0,
       });
     }
+
+    o.particles = particles;
+  }
+
+  function makeOrbRenderer(container) {
+    const canvas = document.createElement('canvas');
+    container.appendChild(canvas);
     return {
       container,
       canvas,
       ctx: canvas.getContext('2d'),
-      particles,
+      particles: null, // see buildOrbParticles
+      density: 0,
       angle: Math.random() * Math.PI * 2,
       speed: 0.18,
       pixelSize: 0,
@@ -1119,6 +1213,7 @@
   function drawOrb(o, dt, now, animate) {
     const el = o.container;
     if (el.offsetWidth === 0) return; // hidden (e.g. onboarding step not shown)
+    if (!o.particles) buildOrbParticles(o, el.offsetWidth);
 
     const dpr = window.devicePixelRatio || 1;
     const pixelSize = Math.round(el.offsetWidth * 1.5 * dpr);
@@ -1149,7 +1244,8 @@
       burstScale = 1 + 0.45 * Math.exp(-t * 3.5) * Math.sin(Math.min(t * 9, Math.PI));
     }
 
-    const { accent, bright } = getOrbPalette();
+    const { accent, bgIsLight } = getOrbPalette();
+    const sprites = getOrbSprites();
     const ctx = o.ctx;
     const size = pixelSize;
     const center = size / 2;
@@ -1157,9 +1253,12 @@
 
     ctx.clearRect(0, 0, size, size);
 
-    // soft core glow behind the cloud
-    const glow = ctx.createRadialGradient(center, center, 0, center, center, radius * 1.2);
-    glow.addColorStop(0, rgba(accent, active ? 0.30 : 0.16));
+    // Soft core glow behind the cloud. Deliberately fainter than it used to be:
+    // it now sits *under* additive bloom, so the old opacity blew the middle out
+    // to a flat disc. This is just a floor of warmth, not the light source.
+    const glow = ctx.createRadialGradient(center, center, 0, center, center, radius * 1.35);
+    glow.addColorStop(0, rgba(accent, active ? 0.17 : 0.09));
+    glow.addColorStop(0.55, rgba(accent, active ? 0.07 : 0.035));
     glow.addColorStop(1, rgba(accent, 0));
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, size, size);
@@ -1170,7 +1269,19 @@
     const sinT = Math.sin(tilt);
     const cosT = Math.cos(tilt);
     const seconds = now / 1000;
-    const dotScale = size / 190;
+
+    // Sprites shrink and dim as the cloud gets denser, so a hero orb reads as
+    // fine grain rather than as a saturated blob.
+    const spriteScale = size * (0.052 - 0.030 * o.density) * burstScale;
+    // Light theme runs dimmer: additive overlaps sum toward white, and white on
+    // a cream page is invisible. Keeping each grain fainter means dense regions
+    // land on saturated terracotta instead of clipping out to nothing.
+    const alphaScale = (1.05 - 0.40 * o.density) * (active ? 1.35 : 1) * (bgIsLight ? 0.6 : 1);
+
+    // No depth sort. Additive blending is commutative, so draw order cannot
+    // change the result — sorting ~2600 particles per frame would cost real
+    // time and buy exactly nothing. Please don't "fix" this.
+    ctx.globalCompositeOperation = 'lighter';
 
     for (const p of o.particles) {
       // rotate around the vertical axis…
@@ -1185,16 +1296,32 @@
       const py = center + y2 * radius * persp;
       const depth = (z2 + 1) / 2; // 0 = back, 1 = front
 
-      let alpha = 0.10 + 0.8 * depth * depth;
-      if (animate) alpha *= 0.72 + 0.28 * Math.sin(seconds * p.twinkleSpeed + p.twinklePhase);
-      if (active) alpha = Math.min(1, alpha * 1.3);
+      // Fresnel rim: particles whose *projected* distance from centre is near
+      // the silhouette get boosted. Those are the grazing-angle points, and
+      // lighting them is what makes a flat scatter snap into a sphere.
+      const rr = Math.min(1, Math.sqrt(x * x + y2 * y2));
+      // pow 5 rather than something steeper: a tighter exponent gives a hard
+      // one-pixel ring that looks like a stroked circle, not a lit edge.
+      const rim = Math.pow(rr, 5) * (1 - Math.abs(z2) * 0.55);
 
-      const dotRadius = Math.max(0.4, (0.5 + 1.15 * depth) * p.sizeJitter * dotScale);
-      ctx.beginPath();
-      ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
-      ctx.fillStyle = depth > 0.86 ? rgba(bright, alpha) : rgba(accent, alpha);
-      ctx.fill();
+      let alpha = (0.12 + 0.88 * depth * depth) * p.gain * alphaScale;
+      alpha += rim * 0.5 * p.gain;
+      if (animate) alpha *= 0.74 + 0.26 * Math.sin(seconds * p.twinkleSpeed + p.twinklePhase);
+      if (alpha < 0.012) continue; // fully-dim band troughs aren't worth a blit
+      if (alpha > 1) alpha = 1;
+
+      const s = Math.max(1.2, (0.55 + 0.95 * depth + rim * 0.7) * p.sizeJitter * spriteScale);
+      // Front-most grains and rim grains use the near-white sprite; the body of
+      // the cloud stays accent-coloured so the whole thing keeps its warmth.
+      const sprite = depth > 0.84 || rim > 0.45 ? sprites.bright : sprites.accent;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(sprite, px - s / 2, py - s / 2, s, s);
     }
+
+    // Leave the context how we found it — the same canvas 2D state is reused
+    // next frame for the core glow, which must not be additive.
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   let orbLastFrameAt = 0;
@@ -1212,7 +1339,11 @@
   }
 
   function orbFrame(now) {
-    orbTick(now);
+    // Perf guard: a hero orb is ~2600 sprite blits a frame, which is not worth
+    // spending on a background tab. (Most browsers already throttle rAF when
+    // hidden, but embedded webviews don't reliably, and the watchdog below
+    // would otherwise happily keep ticking at full cost.)
+    if (!document.hidden) orbTick(now);
     requestAnimationFrame(orbFrame);
   }
 
@@ -1221,20 +1352,70 @@
       if (el.classList.contains('orb--dot')) continue;
       orbRenderers.push(makeOrbRenderer(el));
     }
-    // theme flips change --accent; drop the cached palette so the next frame
-    // picks up the new colors
-    new MutationObserver(() => { orbPalette = null; })
+    // theme flips change --accent; drop the cached palette *and* the sprites
+    // baked from it so the next frame picks up the new colors
+    new MutationObserver(() => { orbPalette = null; orbSprites = null; })
       .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    // Coming back from a hidden tab, `now` has jumped; reset the clock so the
+    // first visible frame doesn't integrate a huge dt into the spin.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) orbLastFrameAt = performance.now();
+    });
 
     orbReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     requestAnimationFrame(orbFrame);
     // Some embedded webviews render the page while reporting it hidden, which
     // suppresses requestAnimationFrame entirely. If frames stall, keep the
-    // orb alive at a low rate; when rAF is healthy this never fires. The cost
-    // while genuinely hidden is negligible (three small canvases at 10fps).
+    // orb alive at a low rate; when rAF is healthy this never fires.
+    //
+    // Note this deliberately does NOT check document.hidden: those webviews
+    // are exactly the case where document.hidden lies, so honouring it here
+    // would freeze the orb for them permanently. 10fps is the floor we pay.
     setInterval(() => {
       if (performance.now() - orbLastFrameAt > 400) orbTick(performance.now());
     }, 100);
+
+    initHeroOrb();
+  }
+
+  // The hero orb is a nice first impression and dead weight thereafter, so it
+  // folds away once you start reading the list below it.
+  function initHeroOrb() {
+    const wrap = document.getElementById('hero-orb-wrap');
+    const scroller = document.getElementById('main-content');
+    if (!wrap) return;
+
+    // Which element actually scrolls depends on how tall the content is:
+    // .app-shell is only min-height-capped, so with a short session list the
+    // whole document scrolls and .main-content never overflows, while with a
+    // long list .main-content takes over. Watch both and use whichever moved.
+    const offset = () => Math.max(
+      scroller ? scroller.scrollTop : 0,
+      window.pageYOffset || document.documentElement.scrollTop || 0
+    );
+
+    // Hysteresis: collapse past 80px, expand only back under 30px. A single
+    // threshold makes the hero flap open and shut when you rest mid-scroll.
+    let collapsed = false;
+    let lastAt = 0;
+    // Throttle on a timestamp rather than coalescing into requestAnimationFrame:
+    // some embedded webviews report the document as permanently hidden and never
+    // fire rAF at all (see the watchdog in initOrbs), which would leave the hero
+    // stuck open forever. ~60ms is well under the transition duration, so this
+    // still feels immediate, and scrollTop is the only layout read per call.
+    const onScroll = () => {
+      const t = performance.now();
+      if (t - lastAt < 60) return;
+      lastAt = t;
+      const y = offset();
+      if (!collapsed && y > 80) collapsed = true;
+      else if (collapsed && y < 30) collapsed = false;
+      else return;
+      wrap.classList.toggle('is-collapsed', collapsed);
+    };
+    if (scroller) scroller.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('scroll', onScroll, { passive: true });
   }
 
   // ---------- settings, onboarding & project picker ----------
