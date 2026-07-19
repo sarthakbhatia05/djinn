@@ -2,7 +2,7 @@
 
 ## Problem
 
-Claude Code sessions are spread across multiple project folders (currently `D:\Projects\DFM-Project\*` and `D:\Projects\Mimo-Monitors\*`, more later). There's no single place to see what's running, what changed last, or queue up work without opening a terminal per project. Existing tools were tried and rejected:
+Claude Code sessions are spread across multiple project folders (currently `D:\Projects\acme\*` and `D:\Projects\contoso\*`, more later). There's no single place to see what's running, what changed last, or queue up work without opening a terminal per project. Existing tools were tried and rejected:
 
 - **Nimbalyst** (open-source Electron app) — covers sessions/tasks/kanban but was judged too complicated for what's needed here.
 
@@ -65,7 +65,7 @@ Plain HTML/CSS/JS to start (matches "simpler" — no framework build step requir
 
 ## Success criteria (v1)
 
-- Open one URL, see every session across `D:\Projects\DFM-Project\*` and `D:\Projects\Mimo-Monitors\*` with correct status and last activity.
+- Open one URL, see every session across `D:\Projects\acme\*` and `D:\Projects\contoso\*` with correct status and last activity.
 - Start a new session in a chosen directory (recent-list or browse) from the dashboard, without a terminal.
 - Send a follow-up instruction to an existing session from the dashboard and see the result.
 - Add a backlog item, tag it to a repo, see it listed under that repo.

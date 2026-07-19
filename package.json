@@ -1,8 +1,9 @@
 {
-  "name": "claude-dashboard",
+  "name": "djinn",
   "version": "0.1.0",
   "private": true,
-  "description": "Local dashboard for managing Claude Code sessions across projects",
+  "license": "MIT",
+  "description": "A local dashboard for managing Claude Code sessions: see them all, chat with any of them, and summon new ones.",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",

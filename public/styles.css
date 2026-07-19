@@ -785,3 +785,316 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   border: none;
   cursor: pointer;
 }
+
+/* ---------- The living orb (3D particle cloud, canvas-driven) ----------
+   The animation itself lives in app.js: a rotating, perspective-projected
+   particle sphere drawn on a canvas inside each .orb container. These rules
+   only size the containers. */
+
+.orb {
+  position: relative;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+/* Canvas oversizes its container so the glow and edge particles aren't clipped */
+.orb > canvas {
+  position: absolute;
+  left: -25%;
+  top: -25%;
+  width: 150%;
+  height: 150%;
+  pointer-events: none;
+}
+
+.orb--header { width: 26px; height: 26px; }
+.orb--large { width: 132px; height: 132px; margin-bottom: 30px; }
+.orb--medium { width: 64px; height: 64px; margin-bottom: 22px; }
+
+/* Chat avatars and the working indicator stay as simple beads — a canvas
+   per message would be wasteful at 12px. */
+.orb--dot {
+  width: 12px;
+  height: 12px;
+  background: radial-gradient(circle at 35% 30%, #ffd6aa, var(--accent) 55%, #9e4a2c 100%);
+  box-shadow: 0 0 6px rgba(217, 119, 87, 0.55);
+}
+
+/* ---------- Header additions ---------- */
+
+.header-title { cursor: pointer; }
+.header-title:hover { color: var(--accent); }
+.header-rename-input {
+  font-family: 'DotGothic16', monospace;
+  font-size: 12.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 4px 8px;
+  outline: none;
+  width: 180px;
+}
+.projects-btn { cursor: pointer; }
+.projects-btn:hover { border-color: var(--accent); color: var(--text); }
+.projects-btn-hint { font-size: 10px; color: var(--accent); }
+
+/* ---------- Onboarding ---------- */
+
+@keyframes onboarding-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.onboarding-overlay[hidden] { display: none; }
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 560px;
+  width: 100%;
+  padding: 24px;
+  animation: onboarding-rise 0.5s ease-out;
+}
+.onboarding-step[hidden] { display: none; }
+.onboarding-title {
+  font-size: 24px;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 10px;
+}
+.onboarding-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.7;
+  margin-bottom: 26px;
+  max-width: 440px;
+}
+.onboarding-input-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  max-width: 420px;
+}
+.onboarding-name-input {
+  flex: 1;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  text-align: center;
+}
+.onboarding-name-input:focus { border-color: var(--accent); }
+.onboarding-confirm-btn {
+  padding: 12px 22px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: none;
+  cursor: pointer;
+}
+.onboarding-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 18px;
+}
+.onboarding-skip-btn {
+  padding: 11px 18px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* ---------- Project picker (onboarding + modal) ---------- */
+
+.project-picker-list {
+  width: 100%;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.project-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.project-picker-row:hover { background: var(--surface-2); }
+.project-picker-checkbox { flex-shrink: 0; }
+.project-picker-info { flex: 1; min-width: 0; }
+.project-picker-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-picker-path {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-picker-count {
+  font-family: 'Silkscreen', monospace;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.project-picker-empty {
+  padding: 18px 12px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-align: center;
+}
+.project-picker-add-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+}
+.project-picker-add-input {
+  flex: 1;
+  padding: 9px 12px;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.project-picker-add-btn {
+  padding: 9px 14px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.project-picker-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- Projects modal ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay[hidden] { display: none; }
+.modal {
+  width: 520px;
+  max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  animation: onboarding-rise 0.25s ease-out;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.modal-sub { margin-bottom: 14px; text-align: left; max-width: none; }
+
+/* ---------- Chat panel ---------- */
+
+.chat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 100%;
+}
+.chat-row--user { justify-content: flex-end; }
+.chat-row--assistant { justify-content: flex-start; }
+.chat-msg {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 11px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.chat-msg--user {
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-bottom-right-radius: 4px;
+}
+.chat-msg--assistant {
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-bottom-left-radius: 4px;
+}
+.chat-msg--tool {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  background: transparent;
+  border: 1px dashed var(--border);
+  padding: 5px 10px;
+}
+.chat-empty {
+  padding: 24px 8px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-align: center;
+}
+.chat-working {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.chat-working[hidden] { display: none; }

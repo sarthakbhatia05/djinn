@@ -8,6 +8,8 @@ const { createClaudeCli } = require('./lib/claudeCli');
 const { createBacklogStore } = require('./lib/backlogStore');
 const { createMemoryStore } = require('./lib/memoryStore');
 const { createRecentDirectories } = require('./lib/recentDirectories');
+const { createSettingsStore } = require('./lib/settingsStore');
+const { createTranscriptWatcher } = require('./lib/transcriptWatcher');
 const { pickFolder } = require('./lib/folderPicker');
 
 const PORT = process.env.PORT || 4317;
@@ -32,10 +34,16 @@ const memoryStore = createMemoryStore({
   projectDir: path.join(dataDir, 'memory-projects'),
 });
 const recentDirectories = createRecentDirectories({ filePath: path.join(dataDir, 'recent-directories.json') });
+const settingsStore = createSettingsStore({ filePath: path.join(dataDir, 'settings.json') });
 const folderPicker = { pickFolder };
 
-const app = createApp({ sessionStore, claudeCli, backlogStore, memoryStore, recentDirectories, folderPicker });
+const app = createApp({ sessionStore, claudeCli, backlogStore, memoryStore, recentDirectories, settingsStore, folderPicker });
 const server = http.createServer(app);
+
+const transcriptWatcher = createTranscriptWatcher({
+  getTranscriptPath: (sessionId) => sessionStore.getTranscriptPath(sessionId),
+});
+wss.on('connection', (ws) => transcriptWatcher.attach(ws));
 
 server.on('upgrade', (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => {

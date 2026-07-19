@@ -24,8 +24,9 @@ function request(port, method, urlPath, body) {
 function makeDeps(overrides = {}) {
   return {
     sessionStore: {
-      listSessions: () => [{ id: 's1', projectPath: 'D:/demo', title: 'x', lastActivity: '2026-07-15T00:00:00.000Z' }],
+      listSessions: () => [{ id: 's1', projectPath: 'D:/demo', pathResolved: true, title: 'x', lastActivity: '2026-07-15T00:00:00.000Z' }],
       listProjects: () => [{ projectPath: 'D:/demo', projectFolder: 'D--demo', sessionCount: 1, lastActivity: '2026-07-15T00:00:00.000Z' }],
+      readMessages: (id) => (id === 's1' ? [{ role: 'user', text: 'hi', timestamp: null }] : null),
     },
     claudeCli: {
       isRunning: () => false,
@@ -36,6 +37,10 @@ function makeDeps(overrides = {}) {
     backlogStore: { list: () => [] },
     memoryStore: { getCommon: () => ({ text: '' }), getProject: () => ({ text: '' }) },
     folderPicker: { pickFolder: async () => null },
+    settingsStore: {
+      get: () => ({ assistantName: 'Djinn', onboardedAt: null, projects: ['D:/demo'] }),
+      addProject: () => {},
+    },
     ...overrides,
   };
 }
@@ -89,6 +94,39 @@ test('POST /api/sessions/:id/message resumes a known session', async () => {
   server.close();
 });
 
+test('GET /api/sessions/:id/messages returns the parsed conversation', async () => {
+  const server = createApp(makeDeps()).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'GET', '/api/sessions/s1/messages');
+  assert.strictEqual(status, 200);
+  assert.deepStrictEqual(body, { messages: [{ role: 'user', text: 'hi', timestamp: null }] });
+  server.close();
+});
+
+test('GET /api/sessions/:id/messages 404s for an unknown session', async () => {
+  const server = createApp(makeDeps()).listen(0);
+  const { port } = server.address();
+  const { status } = await request(port, 'GET', '/api/sessions/unknown/messages');
+  assert.strictEqual(status, 404);
+  server.close();
+});
+
+test('POST /api/sessions/:id/message 409s when the project path never resolved', async () => {
+  const deps = makeDeps({
+    sessionStore: {
+      listSessions: () => [{ id: 's1', projectPath: 'D--demo', pathResolved: false }],
+      listProjects: () => [],
+      readMessages: () => null,
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
+  assert.strictEqual(status, 409);
+  assert.ok(body.error);
+  server.close();
+});
+
 test('GET /api/sessions/active-count returns activeCount from claudeCli', async () => {
   const deps = makeDeps({
     claudeCli: {
@@ -112,6 +150,47 @@ test('GET /api/sessions still returns a plain array (response shape regression g
   const { status, body } = await request(port, 'GET', '/api/sessions');
   assert.strictEqual(status, 200);
   assert.ok(Array.isArray(body), 'expected GET /api/sessions to return an array');
+  server.close();
+});
+
+test('GET /api/sessions hides sessions whose project is not tracked', async () => {
+  const deps = makeDeps({
+    sessionStore: {
+      listSessions: () => [
+        { id: 's1', projectPath: 'D:\\Demo', pathResolved: true },
+        { id: 's2', projectPath: 'D:/untracked', pathResolved: true },
+      ],
+      listProjects: () => [],
+      readMessages: () => null,
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { body } = await request(port, 'GET', '/api/sessions');
+  assert.deepStrictEqual(body.map((s) => s.id), ['s1']);
+  server.close();
+});
+
+test('GET /api/sessions with an empty allowlist returns an empty list', async () => {
+  const deps = makeDeps({
+    settingsStore: { get: () => ({ assistantName: null, onboardedAt: null, projects: [] }), addProject: () => {} },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { body } = await request(port, 'GET', '/api/sessions');
+  assert.deepStrictEqual(body, []);
+  server.close();
+});
+
+test('POST /api/sessions auto-adds the cwd to tracked projects', async () => {
+  const added = [];
+  const deps = makeDeps({
+    settingsStore: { get: () => ({ assistantName: 'Djinn', onboardedAt: null, projects: [] }), addProject: (p) => added.push(p) },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  await request(port, 'POST', '/api/sessions', { cwd: 'D:\\fresh', message: 'go' });
+  assert.deepStrictEqual(added, ['D:\\fresh']);
   server.close();
 });
 

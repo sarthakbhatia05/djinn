@@ -8,7 +8,45 @@
     activeDetailId: null,
     selectedDirectory: null,
     activeCount: 0,
+    settings: null,
   };
+
+  // ---------- assistant identity + tracked projects ----------
+
+  function assistantName() {
+    return (state.settings && state.settings.assistantName) || 'Assistant';
+  }
+
+  // Same loose comparison the server uses: project paths appear with varying
+  // case and slash direction depending on where they were recorded.
+  function normalizeClientPath(p) {
+    return String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  }
+
+  function isTrackedPath(p) {
+    if (!state.settings) return true; // settings not loaded yet — hide nothing
+    if (!p) return false;
+    return state.settings.projects.some((t) => normalizeClientPath(t) === normalizeClientPath(p));
+  }
+
+  function trackedProjects() {
+    return state.projects.filter((p) => isTrackedPath(p.projectPath));
+  }
+
+  function lastPathSegment(p) {
+    const segments = String(p).replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
+    return segments.length ? segments[segments.length - 1] : String(p);
+  }
+
+  function applyAssistantName() {
+    const name = state.settings && state.settings.assistantName;
+    const titleEl = document.getElementById('header-assistant-name');
+    if (titleEl) titleEl.textContent = name ? `${name} · console` : 'console';
+    document.title = name ? `${name} — Djinn` : 'Djinn';
+    const workingText = document.getElementById('chat-working-text');
+    if (workingText) workingText.textContent = `${assistantName()} is working…`;
+    updateCommandBarHint();
+  }
 
   // ---------- fetch helper ----------
 
@@ -153,7 +191,11 @@
     const grid = document.getElementById('session-grid');
 
     if (state.sessions.length === 0) {
-      grid.innerHTML = '<div class="empty-state">No sessions found in ~/.claude/projects yet.</div>';
+      const noTracked = state.settings && state.settings.projects.length === 0;
+      grid.innerHTML = '<div class="empty-state"></div>';
+      grid.firstChild.textContent = noTracked
+        ? 'No projects tracked yet — open “Projects” in the header to choose some.'
+        : 'No sessions in your tracked projects yet.';
       return;
     }
     // If the grid currently holds only the empty-state placeholder, clear it
@@ -192,11 +234,12 @@
   function renderProjects() {
     const list = document.getElementById('project-list');
     list.innerHTML = '';
-    if (state.projects.length === 0) {
-      list.innerHTML = '<div class="empty-state">No projects yet.</div>';
+    const visible = trackedProjects();
+    if (visible.length === 0) {
+      list.innerHTML = '<div class="empty-state">No tracked projects.</div>';
       return;
     }
-    for (const project of state.projects) {
+    for (const project of visible) {
       const row = document.createElement('div');
       row.className = 'row';
       row.innerHTML = `
@@ -219,10 +262,11 @@
   function renderBacklog() {
     const list = document.getElementById('backlog-list');
     list.innerHTML = '';
-    if (state.backlog.length === 0) {
+    const visibleBacklog = state.backlog.filter((i) => isTrackedPath(i.repoPath));
+    if (visibleBacklog.length === 0) {
       list.innerHTML = '<div class="empty-state">Nothing queued.</div>';
     } else {
-      for (const item of state.backlog) {
+      for (const item of visibleBacklog) {
         const row = document.createElement('div');
         row.className = 'backlog-row';
         const priority = item.priority || 'medium';
@@ -249,7 +293,7 @@
       }
     }
 
-    const queued = state.backlog.filter((i) => !i.done).length;
+    const queued = visibleBacklog.filter((i) => !i.done).length;
     const countEl = document.getElementById('backlog-count');
     if (countEl) countEl.textContent = `${queued} queued`;
   }
@@ -288,19 +332,31 @@
     await loadBacklog();
   }
 
-  // ---------- detail drawer ----------
+  // ---------- chat panel (detail drawer) ----------
+
+  function watchSession(sessionId) {
+    sendWsMessage({ type: 'watch', sessionId });
+  }
+
+  function unwatchSession(sessionId) {
+    sendWsMessage({ type: 'unwatch', sessionId });
+  }
 
   function openDetail(sessionId) {
     const session = state.sessions.find((s) => s.id === sessionId);
     if (!session) return;
-    if (state.activeDetailId !== sessionId) {
-      // Switching to a different session's drawer — clear the previous
-      // session's output so stale text is never shown against the new one.
-      const outputEl = document.getElementById('detail-output');
-      if (outputEl) outputEl.textContent = '';
+    if (state.activeDetailId && state.activeDetailId !== sessionId) {
+      unwatchSession(state.activeDetailId);
     }
+    const isSwitch = state.activeDetailId !== sessionId;
     state.activeDetailId = sessionId;
     renderDetail(session);
+    if (isSwitch) {
+      const history = document.getElementById('chat-history');
+      if (history) history.innerHTML = '';
+      loadChatMessages(sessionId);
+      watchSession(sessionId);
+    }
     // reflect the active card highlight without a full grid rebuild
     for (const child of document.getElementById('session-grid').children) {
       if (child.dataset) child.classList.toggle('card--active', child.dataset.sessionId === sessionId);
@@ -324,15 +380,49 @@
     drawer.querySelector('.detail-title').textContent = session.title || '(no summary yet)';
     drawer.querySelector('.detail-meta').textContent =
       `${session.projectName || session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
+  }
 
-    // No API currently supplies plan-step data. Rather than show a
-    // permanently-empty "Agent plan" box, hide the section entirely when
-    // there's nothing to show.
-    const planList = document.getElementById('detail-plan-list');
-    const planEyebrow = drawer.querySelector('.plan-eyebrow');
-    const hasPlan = !!(planList && planList.children.length > 0);
-    if (planList) planList.style.display = hasPlan ? '' : 'none';
-    if (planEyebrow) planEyebrow.style.display = hasPlan ? '' : 'none';
+  async function loadChatMessages(sessionId) {
+    const result = await guarded(
+      fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`),
+      'Failed to load the conversation'
+    );
+    // The user may have switched or closed the panel while this was in flight.
+    if (result === null || state.activeDetailId !== sessionId) return;
+    renderChatMessages(result.messages);
+  }
+
+  function renderChatMessages(messages) {
+    const container = document.getElementById('chat-history');
+    if (!container) return;
+    // Only auto-stick to the bottom if the user was already reading the tail.
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
+    container.innerHTML = '';
+
+    if (!messages || messages.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-empty';
+      empty.textContent = `No conversation yet — say something to ${assistantName()}.`;
+      container.appendChild(empty);
+      return;
+    }
+
+    for (const msg of messages) {
+      const row = document.createElement('div');
+      const isUser = msg.role === 'user';
+      row.className = `chat-row chat-row--${isUser ? 'user' : 'assistant'}`;
+      if (!isUser && msg.kind !== 'tool') {
+        const avatar = document.createElement('span');
+        avatar.className = 'orb orb--dot';
+        row.appendChild(avatar);
+      }
+      const bubble = document.createElement('div');
+      bubble.className = `chat-msg chat-msg--${msg.kind === 'tool' ? 'tool' : (isUser ? 'user' : 'assistant')}`;
+      bubble.textContent = msg.text; // user/model text — never innerHTML
+      row.appendChild(bubble);
+      container.appendChild(row);
+    }
+    if (nearBottom || container.scrollTop === 0) container.scrollTop = container.scrollHeight;
   }
 
   function updateOpenDetailIfPresent() {
@@ -342,6 +432,7 @@
   }
 
   function closeDetail() {
+    if (state.activeDetailId) unwatchSession(state.activeDetailId);
     state.activeDetailId = null;
     const drawer = document.getElementById('detail-drawer');
     drawer.style.display = 'none';
@@ -356,22 +447,26 @@
       showToast('Type a message before sending.');
       return;
     }
-    const outputEl = document.getElementById('detail-output');
-    if (outputEl) outputEl.textContent = 'Working…';
+    const sessionId = state.activeDetailId;
+    const workingEl = document.getElementById('chat-working');
+    const workingText = document.getElementById('chat-working-text');
+    if (workingText) workingText.textContent = `${assistantName()} is working…`;
+    if (workingEl) workingEl.hidden = false;
 
     try {
-      const result = await fetchJson(`/api/sessions/${state.activeDetailId}/message`, {
+      await fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
       });
-      if (outputEl) outputEl.textContent = result.result || '(agent returned no output)';
       await loadSessions();
+      if (state.activeDetailId === sessionId) await loadChatMessages(sessionId);
     } catch (err) {
-      const errorMessage = err && err.message ? err.message : 'Failed to send message to session';
+      const errorMessage = err && err.message ? err.message : 'Failed to send the message';
       console.error('Failed to send message to session', err);
       showToast(errorMessage);
-      if (outputEl) outputEl.textContent = errorMessage;
+    } finally {
+      if (workingEl) workingEl.hidden = true;
     }
   }
 
@@ -386,7 +481,7 @@
     if (!hint) return;
     const dir = currentTargetDirectory();
     hint.textContent = dir
-      ? `issue a command — I'll route it to an agent, running in: ${dir}`
+      ? `issue a command — ${assistantName()} will run it in: ${dir}`
       : `issue a command — pick a directory with "+ New session" first`;
   }
 
@@ -461,7 +556,7 @@
       openNewSessionMenu();
       return;
     }
-    showToast('Starting session…', false);
+    showToast(`${assistantName()} is on it…`, false);
     const result = await guarded(
       fetchJson('/api/sessions', {
         method: 'POST',
@@ -472,15 +567,29 @@
     );
     if (result === null) return;
     input.value = '';
-    showToast('Session started.', false);
+    showToast(`${assistantName()} finished the run — session added.`, false);
     await Promise.all([loadSessions(), loadProjects(), loadRecentDirectories()]);
   }
 
   // ---------- WebSocket ----------
 
+  let wsConnection = null;
+
+  function sendWsMessage(obj) {
+    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+      wsConnection.send(JSON.stringify(obj));
+    }
+  }
+
   function connectWebSocket() {
     const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
     const ws = new WebSocket(`${scheme}${location.host}`);
+    wsConnection = ws;
+    ws.addEventListener('open', () => {
+      // Server-side watches die with the old connection — re-establish for
+      // whichever chat is open.
+      if (state.activeDetailId) watchSession(state.activeDetailId);
+    });
     ws.addEventListener('message', (event) => {
       let msg;
       try {
@@ -490,6 +599,8 @@
       }
       if (msg.type === 'session-status') {
         loadSessions();
+      } else if (msg.type === 'transcript-update' && msg.sessionId === state.activeDetailId) {
+        loadChatMessages(msg.sessionId);
       }
     });
     ws.addEventListener('close', () => {
@@ -557,7 +668,7 @@
     const select = document.getElementById('memory-project-select');
     const previous = select.value;
     select.innerHTML = '<option value="">Select a project…</option>';
-    for (const project of state.projects) {
+    for (const project of trackedProjects()) {
       const option = document.createElement('option');
       option.value = project.projectPath;
       option.textContent = project.projectName || project.projectFolder;
@@ -627,8 +738,20 @@
 
     const subEl = document.getElementById('section-header-sub');
     if (subEl) {
-      const repoCount = state.projects.length;
+      const repoCount = trackedProjects().length;
       subEl.textContent = `${runningCount} agent${runningCount === 1 ? '' : 's'} active across ${repoCount} repo${repoCount === 1 ? '' : 's'}`;
+    }
+
+    // The header orb is the global activity indicator: it breathes when idle
+    // and pulses while anything runs.
+    const orb = document.getElementById('header-orb');
+    if (orb) orb.classList.toggle('orb--active', runningCount > 0);
+
+    // Quiet hint on the Projects button when discovered projects are hidden.
+    const hintEl = document.getElementById('untracked-hint');
+    if (hintEl && state.settings) {
+      const untracked = state.projects.filter((p) => !isTrackedPath(p.projectPath)).length;
+      hintEl.textContent = untracked > 0 ? `+${untracked}` : '';
     }
   }
 
@@ -660,6 +783,408 @@
     document.getElementById('all-sessions-row').classList.remove('row--active');
   }
 
+  // ---------- the living orb (3D particle cloud) ----------
+  //
+  // Each .orb container (except the tiny .orb--dot beads) gets a canvas with
+  // a true-3D particle sphere: points spread over a sphere with a fibonacci
+  // lattice, rotated around a tilted axis and perspective-projected every
+  // frame. Depth drives size and opacity, so the cloud visibly turns in 3D.
+  // `.orb--active` (any session running) speeds the spin and brightens the
+  // cloud; `.orb--burst` (naming celebration) fires a one-shot expansion.
+
+  const orbRenderers = [];
+  let orbPalette = null;
+
+  function hexToRgb(hex) {
+    const h = hex.replace('#', '');
+    const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+    const n = parseInt(full, 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function getOrbPalette() {
+    if (orbPalette) return orbPalette;
+    const accentValue = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#d97757';
+    const accent = accentValue.startsWith('#') ? hexToRgb(accentValue) : { r: 217, g: 119, b: 87 };
+    // near-white warm tint for the front-most particles
+    const bright = {
+      r: Math.round(accent.r + (255 - accent.r) * 0.65),
+      g: Math.round(accent.g + (255 - accent.g) * 0.6),
+      b: Math.round(accent.b + (255 - accent.b) * 0.55),
+    };
+    orbPalette = { accent, bright };
+    return orbPalette;
+  }
+
+  function rgba(c, a) {
+    return `rgba(${c.r},${c.g},${c.b},${a})`;
+  }
+
+  function makeOrbRenderer(container) {
+    const canvas = document.createElement('canvas');
+    container.appendChild(canvas);
+    const particles = [];
+    const count = 230;
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < count; i += 1) {
+      const y = 1 - (i / (count - 1)) * 2;
+      const rad = Math.sqrt(Math.max(0, 1 - y * y));
+      const theta = golden * i;
+      particles.push({
+        x: Math.cos(theta) * rad,
+        y,
+        z: Math.sin(theta) * rad,
+        twinkleSpeed: 0.6 + Math.random() * 2.2,
+        twinklePhase: Math.random() * Math.PI * 2,
+        sizeJitter: 0.55 + Math.random() * 1.0,
+      });
+    }
+    return {
+      container,
+      canvas,
+      ctx: canvas.getContext('2d'),
+      particles,
+      angle: Math.random() * Math.PI * 2,
+      speed: 0.18,
+      pixelSize: 0,
+      burstStartedAt: 0,
+    };
+  }
+
+  function drawOrb(o, dt, now, animate) {
+    const el = o.container;
+    if (el.offsetWidth === 0) return; // hidden (e.g. onboarding step not shown)
+
+    const dpr = window.devicePixelRatio || 1;
+    const pixelSize = Math.round(el.offsetWidth * 1.5 * dpr);
+    if (pixelSize <= 0) return;
+    if (o.pixelSize !== pixelSize) {
+      o.pixelSize = pixelSize;
+      o.canvas.width = pixelSize;
+      o.canvas.height = pixelSize;
+    }
+
+    const active = el.classList.contains('orb--active');
+    if (el.classList.contains('orb--burst') && !o.burstStartedAt) {
+      o.burstStartedAt = now;
+      setTimeout(() => {
+        el.classList.remove('orb--burst');
+        o.burstStartedAt = 0;
+      }, 1000);
+    }
+
+    // ease the spin speed toward its target so state changes feel organic
+    const targetSpeed = active ? 1.1 : 0.18;
+    o.speed += (targetSpeed - o.speed) * Math.min(1, dt * 2.5);
+    o.angle += o.speed * dt;
+
+    let burstScale = 1;
+    if (o.burstStartedAt) {
+      const t = (now - o.burstStartedAt) / 1000;
+      burstScale = 1 + 0.45 * Math.exp(-t * 3.5) * Math.sin(Math.min(t * 9, Math.PI));
+    }
+
+    const { accent, bright } = getOrbPalette();
+    const ctx = o.ctx;
+    const size = pixelSize;
+    const center = size / 2;
+    const radius = size * 0.31 * burstScale;
+
+    ctx.clearRect(0, 0, size, size);
+
+    // soft core glow behind the cloud
+    const glow = ctx.createRadialGradient(center, center, 0, center, center, radius * 1.2);
+    glow.addColorStop(0, rgba(accent, active ? 0.30 : 0.16));
+    glow.addColorStop(1, rgba(accent, 0));
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, size, size);
+
+    const sinA = Math.sin(o.angle);
+    const cosA = Math.cos(o.angle);
+    const tilt = 0.42; // fixed axis tilt so the spin reads as 3D
+    const sinT = Math.sin(tilt);
+    const cosT = Math.cos(tilt);
+    const seconds = now / 1000;
+    const dotScale = size / 190;
+
+    for (const p of o.particles) {
+      // rotate around the vertical axis…
+      const x = p.x * cosA + p.z * sinA;
+      const z = -p.x * sinA + p.z * cosA;
+      // …then tilt the whole sphere forward
+      const y2 = p.y * cosT - z * sinT;
+      const z2 = p.y * sinT + z * cosT;
+
+      const persp = 1 / (1.65 - z2 * 0.5);
+      const px = center + x * radius * persp;
+      const py = center + y2 * radius * persp;
+      const depth = (z2 + 1) / 2; // 0 = back, 1 = front
+
+      let alpha = 0.10 + 0.8 * depth * depth;
+      if (animate) alpha *= 0.72 + 0.28 * Math.sin(seconds * p.twinkleSpeed + p.twinklePhase);
+      if (active) alpha = Math.min(1, alpha * 1.3);
+
+      const dotRadius = Math.max(0.4, (0.5 + 1.15 * depth) * p.sizeJitter * dotScale);
+      ctx.beginPath();
+      ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
+      ctx.fillStyle = depth > 0.86 ? rgba(bright, alpha) : rgba(accent, alpha);
+      ctx.fill();
+    }
+  }
+
+  let orbLastFrameAt = 0;
+  let orbReducedMotion = false;
+
+  function orbTick(now) {
+    const dt = orbLastFrameAt ? Math.min(0.05, (now - orbLastFrameAt) / 1000) : 0.016;
+    orbLastFrameAt = performance.now();
+    for (const o of orbRenderers) {
+      // Reduced motion: each orb gets one static frame the first time it's
+      // visible (pixelSize is only set once it has been drawn), then holds.
+      if (orbReducedMotion && o.pixelSize !== 0) continue;
+      drawOrb(o, dt, now, !orbReducedMotion);
+    }
+  }
+
+  function orbFrame(now) {
+    orbTick(now);
+    requestAnimationFrame(orbFrame);
+  }
+
+  function initOrbs() {
+    for (const el of document.querySelectorAll('.orb')) {
+      if (el.classList.contains('orb--dot')) continue;
+      orbRenderers.push(makeOrbRenderer(el));
+    }
+    // theme flips change --accent; drop the cached palette so the next frame
+    // picks up the new colors
+    new MutationObserver(() => { orbPalette = null; })
+      .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    orbReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    requestAnimationFrame(orbFrame);
+    // Some embedded webviews render the page while reporting it hidden, which
+    // suppresses requestAnimationFrame entirely. If frames stall, keep the
+    // orb alive at a low rate; when rAF is healthy this never fires. The cost
+    // while genuinely hidden is negligible (three small canvases at 10fps).
+    setInterval(() => {
+      if (performance.now() - orbLastFrameAt > 400) orbTick(performance.now());
+    }, 100);
+  }
+
+  // ---------- settings, onboarding & project picker ----------
+
+  async function saveSettings(patch) {
+    const updated = await guarded(
+      fetchJson('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      }),
+      'Failed to save settings'
+    );
+    if (updated !== null) {
+      state.settings = updated;
+      applyAssistantName();
+    }
+    return updated;
+  }
+
+  async function initSettings() {
+    const settings = await guarded(fetchJson('/api/settings'), 'Failed to load settings');
+    state.settings = settings || { assistantName: null, onboardedAt: null, projects: [] };
+    applyAssistantName();
+    if (!state.settings.assistantName) openOnboarding();
+  }
+
+  // Paths typed into the "add another path" inputs, per picker instance.
+  const pickerAdded = { onboarding: [], modal: [] };
+
+  // Renders a checkable project list into `containerId`. Entries come from
+  // discovered projects (~/.claude/projects), currently tracked paths that
+  // were never discovered, and paths the user typed this visit.
+  function renderProjectPicker(containerId, addedKey, checkedPaths) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+
+    const checked = new Set(checkedPaths.map(normalizeClientPath));
+    const entries = [];
+    const seen = new Set();
+
+    for (const p of state.projects) {
+      if (!p.projectPath) continue;
+      entries.push({ path: p.projectPath, name: p.projectName || p.projectFolder, count: p.sessionCount });
+      seen.add(normalizeClientPath(p.projectPath));
+    }
+    for (const p of checkedPaths) {
+      if (!seen.has(normalizeClientPath(p))) {
+        entries.push({ path: p, name: lastPathSegment(p), count: null });
+        seen.add(normalizeClientPath(p));
+      }
+    }
+    for (const p of pickerAdded[addedKey]) {
+      if (!seen.has(normalizeClientPath(p))) {
+        entries.push({ path: p, name: lastPathSegment(p), count: null });
+        seen.add(normalizeClientPath(p));
+      }
+    }
+
+    if (entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'project-picker-empty';
+      empty.textContent = 'No projects found yet — add a path below, or skip and start a session later.';
+      container.appendChild(empty);
+      return;
+    }
+
+    for (const entry of entries) {
+      const row = document.createElement('label');
+      row.className = 'project-picker-row';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'project-picker-checkbox';
+      checkbox.checked = checked.has(normalizeClientPath(entry.path));
+      checkbox.dataset.path = entry.path;
+      const info = document.createElement('div');
+      info.className = 'project-picker-info';
+      const name = document.createElement('div');
+      name.className = 'project-picker-name';
+      name.textContent = entry.name;
+      const path = document.createElement('div');
+      path.className = 'project-picker-path';
+      path.textContent = entry.path;
+      info.appendChild(name);
+      info.appendChild(path);
+      row.appendChild(checkbox);
+      row.appendChild(info);
+      if (entry.count !== null && entry.count !== undefined) {
+        const count = document.createElement('div');
+        count.className = 'project-picker-count';
+        count.textContent = `${entry.count} session${entry.count === 1 ? '' : 's'}`;
+        row.appendChild(count);
+      }
+      container.appendChild(row);
+    }
+  }
+
+  function collectPickerSelection(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('.project-picker-checkbox'))
+      .filter((cb) => cb.checked)
+      .map((cb) => cb.dataset.path);
+  }
+
+  function addPickerPath(inputId, containerId, addedKey, checkedPathsFn) {
+    const input = document.getElementById(inputId);
+    const value = input.value.trim();
+    if (!value) return;
+    pickerAdded[addedKey].push(value);
+    input.value = '';
+    // Preserve what's already checked, and check the new path.
+    const current = collectPickerSelection(containerId);
+    renderProjectPicker(containerId, addedKey, [...checkedPathsFn(), ...current, value]);
+  }
+
+  // -- onboarding flow --
+
+  function openOnboarding() {
+    document.getElementById('onboarding-overlay').hidden = false;
+    document.getElementById('onboarding-step-name').hidden = false;
+    document.getElementById('onboarding-step-projects').hidden = true;
+    const input = document.getElementById('onboarding-name-input');
+    setTimeout(() => input.focus(), 50);
+  }
+
+  async function confirmOnboardingName() {
+    const input = document.getElementById('onboarding-name-input');
+    const name = input.value.trim();
+    if (!name) {
+      showToast('Give your assistant a name first.');
+      input.focus();
+      return;
+    }
+    const saved = await saveSettings({ assistantName: name });
+    if (saved === null) return;
+    // Pulse-burst, then advance to the project picker.
+    document.getElementById('onboarding-orb').classList.add('orb--burst');
+    const projects = await guarded(fetchJson('/api/projects'), 'Failed to discover projects');
+    if (projects !== null) state.projects = projects;
+    setTimeout(() => {
+      document.getElementById('onboarding-step-name').hidden = true;
+      document.getElementById('onboarding-step-projects').hidden = false;
+      const titleEl = document.getElementById('onboarding-projects-title');
+      titleEl.textContent = `Which projects should ${name} watch?`;
+      pickerAdded.onboarding = [];
+      renderProjectPicker('onboarding-project-list', 'onboarding', []);
+    }, 700);
+  }
+
+  async function finishOnboarding(skip) {
+    if (!skip) {
+      const selection = collectPickerSelection('onboarding-project-list');
+      const saved = await saveSettings({ projects: selection });
+      if (saved === null) return;
+    }
+    document.getElementById('onboarding-overlay').hidden = true;
+    await Promise.all([loadSessions(), loadProjects(), loadBacklog()]);
+  }
+
+  // -- projects modal --
+
+  function openProjectsModal() {
+    pickerAdded.modal = [];
+    renderProjectPicker('projects-modal-list', 'modal', (state.settings && state.settings.projects) || []);
+    document.getElementById('projects-modal').hidden = false;
+  }
+
+  function closeProjectsModal() {
+    document.getElementById('projects-modal').hidden = true;
+  }
+
+  async function saveProjectsModal() {
+    const selection = collectPickerSelection('projects-modal-list');
+    const saved = await saveSettings({ projects: selection });
+    if (saved === null) return;
+    closeProjectsModal();
+    showToast('Tracked projects updated.', false);
+    await Promise.all([loadSessions(), loadProjects(), loadBacklog()]);
+  }
+
+  // -- header rename --
+
+  function startHeaderRename() {
+    const titleEl = document.getElementById('header-assistant-name');
+    if (!titleEl || titleEl.style.display === 'none') return;
+    const input = document.createElement('input');
+    input.className = 'header-rename-input';
+    input.value = (state.settings && state.settings.assistantName) || '';
+    input.maxLength = 24;
+    titleEl.style.display = 'none';
+    titleEl.parentNode.insertBefore(input, titleEl.nextSibling);
+    input.focus();
+    input.select();
+
+    let finished = false;
+    async function finish(commit) {
+      if (finished) return;
+      finished = true;
+      const name = input.value.trim();
+      input.remove();
+      titleEl.style.display = '';
+      if (commit && name && name !== (state.settings && state.settings.assistantName)) {
+        const saved = await saveSettings({ assistantName: name });
+        if (saved !== null) showToast(`Renamed to ${saved.assistantName}.`, false);
+      }
+    }
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') finish(true);
+      if (e.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
+  }
+
   // ---------- wiring ----------
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -674,6 +1199,7 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeNewSessionMenu();
+        closeProjectsModal();
         closeDetail();
       }
     });
@@ -703,6 +1229,38 @@
     document.getElementById('all-sessions-row').addEventListener('click', showSessionsView);
     document.getElementById('memory-row').addEventListener('click', showMemoryView);
 
+    // onboarding
+    document.getElementById('onboarding-name-confirm').addEventListener('click', confirmOnboardingName);
+    document.getElementById('onboarding-name-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') confirmOnboardingName();
+    });
+    document.getElementById('onboarding-add-btn').addEventListener('click', () => {
+      addPickerPath('onboarding-add-path', 'onboarding-project-list', 'onboarding', () => []);
+    });
+    document.getElementById('onboarding-add-path').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('onboarding-add-btn').click();
+    });
+    document.getElementById('onboarding-skip').addEventListener('click', () => finishOnboarding(true));
+    document.getElementById('onboarding-finish').addEventListener('click', () => finishOnboarding(false));
+
+    // projects modal
+    document.getElementById('projects-btn').addEventListener('click', openProjectsModal);
+    document.getElementById('projects-modal-close').addEventListener('click', closeProjectsModal);
+    document.getElementById('projects-modal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('projects-modal')) closeProjectsModal();
+    });
+    document.getElementById('projects-modal-add-btn').addEventListener('click', () => {
+      addPickerPath('projects-modal-add-path', 'projects-modal-list', 'modal',
+        () => (state.settings && state.settings.projects) || []);
+    });
+    document.getElementById('projects-modal-add-path').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('projects-modal-add-btn').click();
+    });
+    document.getElementById('projects-modal-save').addEventListener('click', saveProjectsModal);
+
+    // rename
+    document.getElementById('header-assistant-name').addEventListener('click', startHeaderRename);
+
     document.getElementById('detail-close-btn').addEventListener('click', closeDetail);
     const detailInput = document.querySelector('#detail-drawer .detail-send-input');
     const detailSendBtn = document.querySelector('#detail-drawer .detail-send-btn');
@@ -714,12 +1272,19 @@
       if (e.key === 'Enter') detailSendBtn.click();
     });
 
-    loadSessions();
-    loadProjects();
-    loadBacklog();
-    loadRecentDirectories();
-    loadMemoryCommon();
-    connectWebSocket();
+    initOrbs();
+
+    // Settings must load first so the tracked-projects filter and the
+    // assistant's name are in place before anything renders.
+    (async () => {
+      await initSettings();
+      loadSessions();
+      loadProjects();
+      loadBacklog();
+      loadRecentDirectories();
+      loadMemoryCommon();
+      connectWebSocket();
+    })();
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     if (!document.hidden) startAutoRefresh();

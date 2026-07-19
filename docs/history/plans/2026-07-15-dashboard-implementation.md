@@ -224,22 +224,22 @@ const { encodeProjectPath } = require('../server/lib/pathEncoding');
 
 test('encodes backslashes, colons, and spaces to hyphens', () => {
   assert.strictEqual(
-    encodeProjectPath('D:\\Projects\\DFM-Project\\oarc-function-app'),
-    'D--Projects-DFM-Project-oarc-function-app'
+    encodeProjectPath('D:\\Projects\\acme\\acme-web'),
+    'D--Projects-acme-acme-web'
   );
 });
 
 test('encodes forward-slash paths the same way (registry keys vary)', () => {
   assert.strictEqual(
-    encodeProjectPath('D:/Projects/DFM-Project/oarc-function-app'),
-    'D--Projects-DFM-Project-oarc-function-app'
+    encodeProjectPath('D:/Projects/acme/acme-web'),
+    'D--Projects-acme-acme-web'
   );
 });
 
 test('encodes spaces in path segments', () => {
   assert.strictEqual(
-    encodeProjectPath('D:\\Projects\\Mimo-Monitors\\Fuji IoT Python Application'),
-    'D--Projects-Mimo-Monitors-Fuji-IoT-Python-Application'
+    encodeProjectPath('D:\\Projects\\contoso\\Data Pipeline App'),
+    'D--Projects-contoso-Data-Pipeline-App'
   );
 });
 ```
@@ -394,7 +394,7 @@ function makeFixture() {
   const claudeHomeDir = path.join(root, 'projects');
   const registryPath = path.join(root, 'claude.json');
 
-  const projectFolder = 'D--Projects-DFM-Project-oarc-function-app';
+  const projectFolder = 'D--Projects-acme-acme-web';
   const projectDir = path.join(claudeHomeDir, projectFolder);
   fs.mkdirSync(projectDir, { recursive: true });
 
@@ -414,7 +414,7 @@ function makeFixture() {
 
   fs.writeFileSync(registryPath, JSON.stringify({
     projects: {
-      'D:/Projects/DFM-Project/oarc-function-app': { lastSessionId: sessionId },
+      'D:/Projects/acme/acme-web': { lastSessionId: sessionId },
     },
   }), 'utf-8');
 
@@ -428,7 +428,7 @@ test('listSessions finds sessions and resolves the real project path from the re
 
   assert.strictEqual(sessions.length, 1);
   assert.strictEqual(sessions[0].id, sessionId);
-  assert.strictEqual(sessions[0].projectPath, 'D:/Projects/DFM-Project/oarc-function-app');
+  assert.strictEqual(sessions[0].projectPath, 'D:/Projects/acme/acme-web');
   assert.strictEqual(sessions[0].pathResolved, true);
   assert.strictEqual(sessions[0].gitBranch, 'feat/checkout-refactor');
   assert.strictEqual(sessions[0].title, 'fix the checkout race condition');
@@ -453,7 +453,7 @@ test('listSessions falls back gracefully when a project folder has no registry m
 
 test('listSessions ignores non-.jsonl entries (e.g. sub-directories)', () => {
   const { claudeHomeDir, registryPath } = makeFixture();
-  fs.mkdirSync(path.join(claudeHomeDir, 'D--Projects-DFM-Project-oarc-function-app', 'not-a-session'));
+  fs.mkdirSync(path.join(claudeHomeDir, 'D--Projects-acme-acme-web', 'not-a-session'));
   const store = createSessionStore({ claudeHomeDir, registryPath });
   assert.strictEqual(store.listSessions().length, 1);
 });
@@ -463,7 +463,7 @@ test('listProjects groups sessions by resolved project path', () => {
   const store = createSessionStore({ claudeHomeDir, registryPath });
   const projects = store.listProjects();
   assert.strictEqual(projects.length, 1);
-  assert.strictEqual(projects[0].projectPath, 'D:/Projects/DFM-Project/oarc-function-app');
+  assert.strictEqual(projects[0].projectPath, 'D:/Projects/acme/acme-web');
   assert.strictEqual(projects[0].sessionCount, 1);
 });
 ```

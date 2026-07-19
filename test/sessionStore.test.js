@@ -11,7 +11,7 @@ function makeFixture() {
   const claudeHomeDir = path.join(root, 'projects');
   const registryPath = path.join(root, 'claude.json');
 
-  const projectFolder = 'D--Projects-DFM-Project-oarc-function-app';
+  const projectFolder = 'D--Projects-acme-acme-web';
   const projectDir = path.join(claudeHomeDir, projectFolder);
   fs.mkdirSync(projectDir, { recursive: true });
 
@@ -31,7 +31,7 @@ function makeFixture() {
 
   fs.writeFileSync(registryPath, JSON.stringify({
     projects: {
-      'D:/Projects/DFM-Project/oarc-function-app': { lastSessionId: sessionId },
+      'D:/Projects/acme/acme-web': { lastSessionId: sessionId },
     },
   }), 'utf-8');
 
@@ -45,7 +45,7 @@ test('listSessions finds sessions and resolves the real project path from the re
 
   assert.strictEqual(sessions.length, 1);
   assert.strictEqual(sessions[0].id, sessionId);
-  assert.strictEqual(sessions[0].projectPath, 'D:/Projects/DFM-Project/oarc-function-app');
+  assert.strictEqual(sessions[0].projectPath, 'D:/Projects/acme/acme-web');
   assert.strictEqual(sessions[0].pathResolved, true);
   assert.strictEqual(sessions[0].gitBranch, 'feat/checkout-refactor');
   assert.strictEqual(sessions[0].title, 'fix the checkout race condition');
@@ -70,7 +70,7 @@ test('listSessions falls back gracefully when a project folder has no registry m
 
 test('listSessions ignores non-.jsonl entries (e.g. sub-directories)', () => {
   const { claudeHomeDir, registryPath } = makeFixture();
-  fs.mkdirSync(path.join(claudeHomeDir, 'D--Projects-DFM-Project-oarc-function-app', 'not-a-session'));
+  fs.mkdirSync(path.join(claudeHomeDir, 'D--Projects-acme-acme-web', 'not-a-session'));
   const store = createSessionStore({ claudeHomeDir, registryPath });
   assert.strictEqual(store.listSessions().length, 1);
 });
@@ -80,7 +80,7 @@ test('listProjects groups sessions by resolved project path', () => {
   const store = createSessionStore({ claudeHomeDir, registryPath });
   const projects = store.listProjects();
   assert.strictEqual(projects.length, 1);
-  assert.strictEqual(projects[0].projectPath, 'D:/Projects/DFM-Project/oarc-function-app');
+  assert.strictEqual(projects[0].projectPath, 'D:/Projects/acme/acme-web');
   assert.strictEqual(projects[0].sessionCount, 1);
 });
 
@@ -88,7 +88,7 @@ test('listSessions degrades gracefully when the registry file is malformed JSON'
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
   const claudeHomeDir = path.join(root, 'projects');
   const registryPath = path.join(root, 'claude.json');
-  const projectDir = path.join(claudeHomeDir, 'D--Projects-DFM-Project-oarc-function-app');
+  const projectDir = path.join(claudeHomeDir, 'D--Projects-acme-acme-web');
   fs.mkdirSync(projectDir, { recursive: true });
   fs.writeFileSync(path.join(projectDir, 'abc.jsonl'), JSON.stringify({ type: 'mode', sessionId: 'abc' }) + '\n', 'utf-8');
   // Registry mid-write / truncated read: not valid JSON.
@@ -202,8 +202,8 @@ test('listSessions and listProjects derive projectName as the final segment of a
   const store = createSessionStore({ claudeHomeDir, registryPath });
   const sessions = store.listSessions();
   const projects = store.listProjects();
-  assert.strictEqual(sessions[0].projectName, 'oarc-function-app');
-  assert.strictEqual(projects[0].projectName, 'oarc-function-app');
+  assert.strictEqual(sessions[0].projectName, 'acme-web');
+  assert.strictEqual(projects[0].projectName, 'acme-web');
 });
 
 test('listSessions falls back to the raw projectFolder for projectName when the path did not resolve', () => {
@@ -368,4 +368,101 @@ test('listProjects counts multiple sessions and sorts projects by lastActivity d
   assert.ok(projects[0].lastActivity > projects[1].lastActivity);
   // Two-session project reports the correct count.
   assert.strictEqual(projects[1].sessionCount, 2);
+});
+
+// --- readMessages / getTranscriptPath (chat view) ---
+
+function makeChatFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-chat-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  const projectDir = path.join(claudeHomeDir, 'D--Projects-demo-app');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: { 'D:/Projects/demo-app': {} } }), 'utf-8');
+
+  const sessionId = 'chat-session-1';
+  const lines = [
+    JSON.stringify({ type: 'user', isMeta: true, message: { role: 'user', content: 'meta caveat line' }, timestamp: '2026-07-15T10:00:00.000Z' }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: '<command-name>/compact</command-name>' }, timestamp: '2026-07-15T10:00:01.000Z' }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'please fix the login bug' }, timestamp: '2026-07-15T10:00:02.000Z' }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text: 'Looking at the auth flow now.' },
+      { type: 'tool_use', name: 'Bash', input: { command: 'npm test', description: 'Run tests' } },
+    ] }, timestamp: '2026-07-15T10:00:10.000Z' }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'ok 1 - passes' }] }, timestamp: '2026-07-15T10:00:12.000Z' }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', name: 'Edit', input: { file_path: 'D:/Projects/demo-app/auth.js' } },
+      { type: 'text', text: 'Fixed. The token check was inverted.' },
+    ] }, timestamp: '2026-07-15T10:00:20.000Z' }),
+    'not valid json',
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'great, thanks' }, timestamp: '2026-07-15T10:01:00.000Z' }),
+  ];
+  fs.writeFileSync(path.join(projectDir, `${sessionId}.jsonl`), lines.join('\n') + '\n', 'utf-8');
+  return { claudeHomeDir, registryPath, sessionId, projectDir };
+}
+
+test('readMessages returns the conversation with wrappers, meta lines, and tool results filtered out', () => {
+  const { claudeHomeDir, registryPath, sessionId } = makeChatFixture();
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const messages = store.readMessages(sessionId);
+
+  assert.deepStrictEqual(messages.map((m) => [m.role, m.kind || null]), [
+    ['user', null],
+    ['assistant', null],
+    ['assistant', 'tool'],
+    ['assistant', 'tool'],
+    ['assistant', null],
+    ['user', null],
+  ]);
+  assert.strictEqual(messages[0].text, 'please fix the login bug');
+  assert.strictEqual(messages[0].timestamp, '2026-07-15T10:00:02.000Z');
+  assert.strictEqual(messages[1].text, 'Looking at the auth flow now.');
+  assert.strictEqual(messages[2].text, 'Ran Bash: Run tests');
+  assert.strictEqual(messages[3].text, 'Ran Edit: D:/Projects/demo-app/auth.js');
+  assert.strictEqual(messages[4].text, 'Fixed. The token check was inverted.');
+  assert.strictEqual(messages[5].text, 'great, thanks');
+});
+
+test('readMessages returns null for an unknown session', () => {
+  const { claudeHomeDir, registryPath } = makeChatFixture();
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  assert.strictEqual(store.readMessages('nope'), null);
+});
+
+test('readMessages rejects session ids that are not plain tokens', () => {
+  const { claudeHomeDir, registryPath } = makeChatFixture();
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  assert.strictEqual(store.readMessages('../../etc/passwd'), null);
+  assert.strictEqual(store.readMessages('a/b'), null);
+});
+
+test('getTranscriptPath locates the transcript file for a known session', () => {
+  const { claudeHomeDir, registryPath, sessionId, projectDir } = makeChatFixture();
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  assert.strictEqual(store.getTranscriptPath(sessionId), path.join(projectDir, `${sessionId}.jsonl`));
+  assert.strictEqual(store.getTranscriptPath('missing'), null);
+});
+
+test('listSessions survives a project folder deleted mid-scan (readdir race)', () => {
+  const { claudeHomeDir, registryPath } = makeFixture();
+  // Simulate the race: a folder that exists in the outer readdir but whose
+  // contents can't be read. A file where a directory is expected produces
+  // ENOTDIR from readdirSync, same failure shape as a folder deleted between
+  // the two readdir calls.
+  fs.writeFileSync(path.join(claudeHomeDir, 'ghost-folder'), 'not a directory', 'utf-8');
+  const realReaddirSync = fs.readdirSync;
+  fs.readdirSync = function patched(dir, opts) {
+    const result = realReaddirSync.call(fs, dir, opts);
+    if (dir === claudeHomeDir) {
+      result.push(new (class { name = 'ghost-folder'; isDirectory() { return true; } isFile() { return false; } })());
+    }
+    return result;
+  };
+  try {
+    const store = createSessionStore({ claudeHomeDir, registryPath });
+    const sessions = store.listSessions();
+    assert.strictEqual(sessions.length, 1);
+  } finally {
+    fs.readdirSync = realReaddirSync;
+  }
 });

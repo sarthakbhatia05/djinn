@@ -101,6 +101,24 @@ function getHeadMeta(filePath, stat) {
   return meta;
 }
 
+// Tool-use blocks collapse to a one-line summary in the chat view. Prefer the
+// human-readable description the model attached to the call; fall back to the
+// most identifying input field.
+const TOOL_SUMMARY_MAX_LENGTH = 120;
+
+function summarizeToolUse(block) {
+  const input = block.input || {};
+  let detail = '';
+  if (typeof input.description === 'string' && input.description.trim()) detail = input.description;
+  else if (typeof input.command === 'string') detail = input.command;
+  else if (typeof input.file_path === 'string') detail = input.file_path;
+  else if (typeof input.pattern === 'string') detail = input.pattern;
+  const text = detail ? `Ran ${block.name}: ${detail}` : `Ran ${block.name}`;
+  const collapsed = text.trim().replace(/\s+/g, ' ');
+  if (collapsed.length <= TOOL_SUMMARY_MAX_LENGTH) return collapsed;
+  return `${collapsed.slice(0, TOOL_SUMMARY_MAX_LENGTH)}…`;
+}
+
 // Final path segment of a resolved project path, for use as a friendly
 // display name. Handles both '\' and '/' separators and trailing separators.
 // Falls back to the raw folder name when the path never resolved.
@@ -149,13 +167,27 @@ function createSessionStore({
     for (const projectFolder of folders) {
       const resolved = resolveProjectPath(projectFolder, registryKeys);
       const projectDir = path.join(claudeHomeDir, projectFolder);
-      const files = fs.readdirSync(projectDir, { withFileTypes: true })
-        .filter((d) => d.isFile() && d.name.endsWith('.jsonl'));
+      // A project folder (or a transcript inside it) can be deleted between
+      // the outer readdir and this scan — e.g. `claude` pruning old sessions
+      // mid-request. Skip that folder rather than aborting the whole list.
+      let files;
+      try {
+        files = fs.readdirSync(projectDir, { withFileTypes: true })
+          .filter((d) => d.isFile() && d.name.endsWith('.jsonl'));
+      } catch {
+        continue;
+      }
 
       for (const file of files) {
         const filePath = path.join(projectDir, file.name);
-        const stat = fs.statSync(filePath);
-        const { gitBranch, title } = getHeadMeta(filePath, stat);
+        let stat;
+        let meta;
+        try {
+          stat = fs.statSync(filePath);
+          meta = getHeadMeta(filePath, stat);
+        } catch {
+          continue;
+        }
         const projectPath = resolved || projectFolder;
         sessions.push({
           id: file.name.replace(/\.jsonl$/, ''),
@@ -163,8 +195,8 @@ function createSessionStore({
           projectPath,
           projectName: deriveProjectName(projectPath, projectFolder),
           pathResolved: resolved !== null,
-          gitBranch,
-          title,
+          gitBranch: meta.gitBranch,
+          title: meta.title,
           lastActivity: stat.mtime.toISOString(),
           sizeBytes: stat.size,
         });
@@ -194,7 +226,58 @@ function createSessionStore({
     return [...byPath.values()].sort((a, b) => (a.lastActivity < b.lastActivity ? 1 : -1));
   }
 
-  return { listSessions, listProjects };
+  // Locate a session's transcript file by scanning project folders. The id
+  // comes straight from a URL parameter, so reject anything that isn't a
+  // plain token before it gets near a path join.
+  function getTranscriptPath(sessionId) {
+    if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) return null;
+    if (!fs.existsSync(claudeHomeDir)) return null;
+    const folders = fs.readdirSync(claudeHomeDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+    for (const projectFolder of folders) {
+      const candidate = path.join(claudeHomeDir, projectFolder, `${sessionId}.jsonl`);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  // Full-transcript parse for the chat view. Returns null when the session
+  // doesn't exist. Reuses the same filtering rules as the title scanner:
+  // isMeta lines, wrapper artifacts, and tool-result arrays (type:'user'
+  // with array content) are not conversation.
+  function readMessages(sessionId) {
+    const filePath = getTranscriptPath(sessionId);
+    if (!filePath) return null;
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const messages = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      let obj;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const timestamp = obj.timestamp || null;
+      if (obj.type === 'user' && !obj.isMeta && typeof obj.message?.content === 'string') {
+        const content = obj.message.content;
+        if (isWrapperContent(content)) continue;
+        messages.push({ role: 'user', text: content.trim(), timestamp });
+      } else if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
+        for (const block of obj.message.content) {
+          if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+            messages.push({ role: 'assistant', text: block.text, timestamp });
+          } else if (block.type === 'tool_use') {
+            messages.push({ role: 'assistant', kind: 'tool', text: summarizeToolUse(block), timestamp });
+          }
+        }
+      }
+    }
+    return messages;
+  }
+
+  return { listSessions, listProjects, getTranscriptPath, readMessages };
 }
 
 module.exports = { createSessionStore };

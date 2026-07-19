@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Code Dashboard</title>
+<title>Djinn</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=DotGothic16&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
@@ -25,12 +25,13 @@
   <!-- Header -->
   <div class="header">
     <div class="header-left">
-      <div class="logo-ring"></div>
-      <div class="eyebrow header-title">CLAUDE CODE <span class="accent-dot">·</span> CONSOLE</div>
+      <div class="orb orb--header" id="header-orb"></div>
+      <div class="eyebrow header-title" id="header-assistant-name" title="Click to rename your assistant">console</div>
     </div>
     <div class="header-right">
-      <div class="mono search-box">
-        <span>⌘K</span><span class="hint">search sessions, repos, tasks</span>
+      <div class="running-count projects-btn" id="projects-btn" title="Choose which projects are tracked">
+        <span>Projects</span>
+        <span class="dotnum projects-btn-hint" id="untracked-hint"></span>
       </div>
       <div class="running-count">
         <div class="status-dot status-dot--pulse-fast" id="running-count-dot"></div>
@@ -159,12 +160,11 @@
           <div class="ghost drawer-close" id="detail-close-btn">×</div>
         </div>
 
-        <div class="drawer-body">
-          <div class="eyebrow plan-eyebrow">Agent plan</div>
-          <div class="plan-list" id="detail-plan-list"></div>
+        <div class="drawer-body chat-body" id="chat-history"></div>
 
-          <div class="eyebrow output-eyebrow">Output</div>
-          <div class="mono output-box" id="detail-output"></div>
+        <div class="mono chat-working" id="chat-working" hidden>
+          <span class="orb orb--dot orb--active"></span>
+          <span id="chat-working-text">working…</span>
         </div>
 
         <div class="drawer-footer">
@@ -173,6 +173,55 @@
         </div>
       </div>
 
+    </div>
+  </div>
+</div>
+
+<!-- First-run onboarding -->
+<div class="onboarding-overlay dot-grid" id="onboarding-overlay" hidden>
+
+  <div class="onboarding-step" id="onboarding-step-name">
+    <div class="orb orb--large" id="onboarding-orb"></div>
+    <div class="onboarding-title">What will you call your djinn?</div>
+    <div class="mono onboarding-sub">Give your assistant a name — it answers to it everywhere.</div>
+    <div class="onboarding-input-row">
+      <input class="mono onboarding-name-input" id="onboarding-name-input" placeholder="Djinn, Wren, Jarvis…" maxlength="24" autocomplete="off">
+      <button class="btn dotnum onboarding-confirm-btn" id="onboarding-name-confirm">Summon</button>
+    </div>
+  </div>
+
+  <div class="onboarding-step" id="onboarding-step-projects" hidden>
+    <div class="orb orb--medium"></div>
+    <div class="onboarding-title" id="onboarding-projects-title">Which projects should it watch?</div>
+    <div class="mono onboarding-sub">Found in ~/.claude/projects. Untracked projects stay hidden — nothing on disk changes, and you can add them any time from “Projects”.</div>
+    <div class="project-picker-list" id="onboarding-project-list"></div>
+    <div class="project-picker-add-row">
+      <input class="mono project-picker-add-input" id="onboarding-add-path" placeholder="Add another path… e.g. /home/you/projects/my-app" autocomplete="off">
+      <button class="btn dotnum project-picker-add-btn" id="onboarding-add-btn">+ Add</button>
+    </div>
+    <div class="onboarding-actions">
+      <button class="ghost onboarding-skip-btn" id="onboarding-skip">Skip for now</button>
+      <button class="btn dotnum onboarding-confirm-btn" id="onboarding-finish">Open the dashboard</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- Tracked-projects manager -->
+<div class="modal-overlay" id="projects-modal" hidden>
+  <div class="modal">
+    <div class="modal-header">
+      <div class="eyebrow">Tracked projects</div>
+      <div class="ghost drawer-close" id="projects-modal-close">×</div>
+    </div>
+    <div class="mono onboarding-sub modal-sub">Unchecked projects are hidden from the dashboard, never touched on disk.</div>
+    <div class="project-picker-list" id="projects-modal-list"></div>
+    <div class="project-picker-add-row">
+      <input class="mono project-picker-add-input" id="projects-modal-add-path" placeholder="Add a path…" autocomplete="off">
+      <button class="btn dotnum project-picker-add-btn" id="projects-modal-add-btn">+ Add</button>
+    </div>
+    <div class="onboarding-actions">
+      <button class="btn dotnum onboarding-confirm-btn" id="projects-modal-save">Save</button>
     </div>
   </div>
 </div>
