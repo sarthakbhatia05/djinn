@@ -809,6 +809,44 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .orb--header { width: 26px; height: 26px; }
 .orb--large { width: 132px; height: 132px; margin-bottom: 30px; }
 .orb--medium { width: 64px; height: 64px; margin-bottom: 22px; }
+.orb--hero { width: 120px; height: 120px; }
+
+/* Contact shadow: a faint elliptical pool of light under the big orbs, so they
+   sit on the page instead of floating in front of it. This is CSS, not canvas,
+   precisely because the canvas must stay square — an ellipse in there would
+   force the backing store wider for a few pixels of glow. */
+.orb--large::after,
+.orb--hero::after {
+  content: '';
+  position: absolute;
+  left: -30%;
+  width: 160%;
+  top: 100%;
+  height: 34%;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, var(--accent) 0%, transparent 70%);
+  opacity: 0.13;
+}
+
+/* Hero orb above the command bar. It costs a chunk of the fold, so app.js
+   collapses it once .main-content scrolls past ~80px. */
+.hero-orb-wrap {
+  display: flex;
+  justify-content: center;
+  max-height: 190px;
+  opacity: 1;
+  overflow: hidden;
+  transition: max-height 0.35s ease, opacity 0.25s ease, margin-bottom 0.35s ease;
+  margin-bottom: 14px;
+}
+.hero-orb-wrap.is-collapsed {
+  max-height: 0;
+  opacity: 0;
+  margin-bottom: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-orb-wrap { transition: none; }
+}
 
 /* Chat avatars and the working indicator stay as simple beads — a canvas
    per message would be wasteful at 12px. */
