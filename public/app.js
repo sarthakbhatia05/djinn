@@ -176,21 +176,176 @@
     card.classList.toggle('card--active', session.id === state.activeDetailId);
   }
 
-  // Currently-running sessions first, then most-recently-active first.
-  function sortedSessions() {
-    return [...state.sessions].sort((a, b) => {
-      const aRunning = a.isRunning ? 1 : 0;
-      const bRunning = b.isRunning ? 1 : 0;
-      if (aRunning !== bRunning) return bRunning - aRunning;
-      if (a.lastActivity === b.lastActivity) return 0;
-      return a.lastActivity < b.lastActivity ? 1 : -1;
+  // ---------- sessions grid: sort / filter / pagination ----------
+
+  const SESSION_PAGE_SIZE = 6;
+  const SESSION_SORT_KEY = 'djinn.sessionSort';
+
+  // Sort persists across reloads; the project filter deliberately does not, so
+  // a fresh load always shows everything.
+  const sessionView = {
+    sort: 'newest',
+    projectFilter: [],
+    limit: SESSION_PAGE_SIZE,
+  };
+
+  function loadSessionSort() {
+    try {
+      const stored = localStorage.getItem(SESSION_SORT_KEY);
+      if (stored === 'newest' || stored === 'oldest') sessionView.sort = stored;
+    } catch {
+      // private-mode / disabled storage — the in-memory default is fine
+    }
+  }
+
+  function saveSessionSort() {
+    try {
+      localStorage.setItem(SESSION_SORT_KEY, sessionView.sort);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Any change to sort or filter starts the user over at the first page.
+  function resetSessionPagination() {
+    sessionView.limit = SESSION_PAGE_SIZE;
+  }
+
+  function visibleSessions() {
+    return selectSessions(state.sessions, {
+      sort: sessionView.sort,
+      projectFilter: sessionView.projectFilter,
+      limit: sessionView.limit,
     });
+  }
+
+  // Same selection with pagination lifted, so "remaining" counts exactly the
+  // sessions that a further "Load more" would reveal.
+  function selectableSessionCount() {
+    return selectSessions(state.sessions, {
+      sort: sessionView.sort,
+      projectFilter: sessionView.projectFilter,
+      limit: Infinity,
+    }).length;
+  }
+
+  // Projects present in the currently loaded sessions, with their counts.
+  function sessionProjectCounts() {
+    const byPath = new Map();
+    for (const s of state.sessions) {
+      const existing = byPath.get(s.projectPath);
+      if (existing) existing.count += 1;
+      else byPath.set(s.projectPath, {
+        projectPath: s.projectPath,
+        projectName: s.projectName || s.projectFolder,
+        count: 1,
+      });
+    }
+    return [...byPath.values()].sort((a, b) => a.projectName.localeCompare(b.projectName));
+  }
+
+  function renderSessionControls() {
+    const sortBtn = document.getElementById('session-sort-btn');
+    if (sortBtn) sortBtn.textContent = sessionView.sort === 'newest' ? 'Newest first' : 'Oldest first';
+
+    const filterBtn = document.getElementById('session-filter-btn');
+    if (filterBtn) {
+      const n = sessionView.projectFilter.length;
+      filterBtn.textContent = n === 0 ? 'Projects: All' : `Projects: ${n} selected`;
+    }
+
+    const options = document.getElementById('session-filter-options');
+    if (options) {
+      options.innerHTML = '';
+      const selected = new Set(sessionView.projectFilter);
+      for (const project of sessionProjectCounts()) {
+        const label = document.createElement('label');
+        label.className = 'session-filter-option';
+        label.title = project.projectPath;
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = selected.has(project.projectPath);
+        checkbox.addEventListener('change', () => {
+          toggleProjectFilter(project.projectPath, checkbox.checked);
+        });
+        const name = document.createElement('span');
+        name.className = 'session-filter-option-name';
+        name.textContent = `${project.projectName} (${project.count})`;
+        label.appendChild(checkbox);
+        label.appendChild(name);
+        options.appendChild(label);
+      }
+    }
+
+    const moreRow = document.getElementById('session-more-row');
+    const moreBtn = document.getElementById('session-more-btn');
+    if (moreRow && moreBtn) {
+      const remaining = selectableSessionCount() - visibleSessions().length;
+      if (remaining > 0) {
+        moreRow.style.display = '';
+        moreBtn.textContent = `Load more (${remaining} remaining)`;
+      } else {
+        moreRow.style.display = 'none';
+      }
+    }
+  }
+
+  function toggleProjectFilter(projectPath, checked) {
+    const without = sessionView.projectFilter.filter((p) => p !== projectPath);
+    sessionView.projectFilter = checked ? without.concat(projectPath) : without;
+    resetSessionPagination();
+    renderSessions();
+  }
+
+  function wireSessionControls() {
+    loadSessionSort();
+
+    const sortBtn = document.getElementById('session-sort-btn');
+    if (sortBtn) {
+      sortBtn.addEventListener('click', () => {
+        sessionView.sort = sessionView.sort === 'newest' ? 'oldest' : 'newest';
+        saveSessionSort();
+        resetSessionPagination();
+        renderSessions();
+      });
+    }
+
+    const filterBtn = document.getElementById('session-filter-btn');
+    const filterMenu = document.getElementById('session-filter-menu');
+    if (filterBtn && filterMenu) {
+      filterBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        filterMenu.style.display = filterMenu.style.display === 'none' ? '' : 'none';
+      });
+      document.addEventListener('click', (e) => {
+        const root = document.getElementById('session-filter');
+        if (root && !root.contains(e.target)) filterMenu.style.display = 'none';
+      });
+    }
+
+    const resetBtn = document.getElementById('session-filter-reset');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', () => {
+        sessionView.projectFilter = [];
+        resetSessionPagination();
+        renderSessions();
+      });
+    }
+
+    const moreBtn = document.getElementById('session-more-btn');
+    if (moreBtn) {
+      moreBtn.addEventListener('click', () => {
+        sessionView.limit += SESSION_PAGE_SIZE;
+        renderSessions();
+      });
+    }
   }
 
   function renderSessions() {
     const grid = document.getElementById('session-grid');
 
     if (state.sessions.length === 0) {
+      renderSessionControls();
       const noTracked = state.settings && state.settings.projects.length === 0;
       grid.innerHTML = '<div class="empty-state"></div>';
       grid.firstChild.textContent = noTracked
@@ -209,7 +364,7 @@
 
     const seen = new Set();
     let previousEl = null;
-    for (const session of sortedSessions()) {
+    for (const session of visibleSessions()) {
       const id = String(session.id);
       seen.add(id);
       let card = existingById.get(id);
@@ -227,6 +382,8 @@
     for (const [id, el] of existingById) {
       if (!seen.has(id)) el.remove();
     }
+
+    renderSessionControls();
   }
 
   // ---------- projects sidebar ----------
@@ -1203,6 +1360,8 @@
         closeDetail();
       }
     });
+
+    wireSessionControls();
 
     document.getElementById('browse-directory-btn').addEventListener('click', browseForDirectory);
     document.getElementById('command-send-btn').addEventListener('click', () => {
