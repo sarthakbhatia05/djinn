@@ -776,7 +776,10 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
    sibling .main-content — and its whole session grid — on every frame, which
    is both expensive and unreliable; the transition was observed sticking at
    currentTime 0 and pinning the drawer at its start width. Resizing is instant. */
-.drawer--wide { width: 60%; }
+/* max() so "wide" can never come out narrower than the normal 360px: on a
+   narrow window 60% resolves to less than that, and the widen button would
+   visibly shrink the panel. */
+.drawer--wide { width: max(360px, 60%); }
 .drawer--full { width: 100%; }
 .main--drawer-full .main-content { display: none; }
 
@@ -988,7 +991,6 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   max-height: 190px;
   opacity: 1;
   overflow: hidden;
-  transition: max-height 0.35s ease, opacity 0.25s ease, margin-bottom 0.35s ease;
   margin-bottom: 14px;
 }
 .hero-orb-wrap.is-collapsed {
@@ -996,9 +998,12 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   opacity: 0;
   margin-bottom: 0;
 }
-@media (prefers-reduced-motion: reduce) {
-  .hero-orb-wrap { transition: none; }
-}
+/* Collapse is deliberately instant. Transitioning max-height/opacity here was
+   observed sticking at currentTime 0 in an embedded webview, which pins the
+   wrapper at max-height:0 and makes the hero orb permanently invisible once
+   you have scrolled down even once. A 350ms ease is not worth a failure mode
+   that silently deletes the headline element; the space reclaim still works.
+   Restore the transition here if you only ever run this in a real browser. */
 
 /* Chat avatars and the working indicator stay as simple beads — a canvas
    per message would be wasteful at 12px. */
