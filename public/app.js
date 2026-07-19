@@ -1201,14 +1201,49 @@
     o.particles = particles;
   }
 
+  // Colours for the shader, as 0..1 floats.
+  //
+  // Deliberately does NOT use getOrbPalette().bright. That value is darkened
+  // on light themes to survive 'lighter' compositing, which the 2D path needed
+  // and this one doesn't — the shader alpha-blends its own buffer, so it has
+  // the full range available. Reusing it here made the cream theme muddy: a
+  // dark "highlight" means the lit side and the rim both go brown.
+  function orbGLColors() {
+    const { accent, bgIsLight } = getOrbPalette();
+    const f = (r, g, b) => [r / 255, g / 255, b / 255];
+
+    if (bgIsLight) {
+      // On cream there's still no headroom for a near-white highlight — it
+      // dissolves into the page. Saturation carries the lighting instead:
+      // a deepened body with a vivid orange highlight, which stays legible
+      // against #f6f5f0 because it differs in chroma, not just in value.
+      return {
+        body: f(accent.r * 0.82, accent.g * 0.64, accent.b * 0.58),
+        hot: f(248, 150, 96),
+        light: 1,
+      };
+    }
+    // On near-black, value does the work — but not to the point of going
+    // desaturated. A near-white highlight plus the wide fresnel pulled most of
+    // the sphere toward white and the orb came out a pale grey moon with no
+    // terracotta left in it. Keep real chroma in the highlight.
+    return { body: f(accent.r, accent.g, accent.b), hot: f(255, 186, 138), light: 0 };
+  }
+
   function makeOrbRenderer(container) {
     const canvas = document.createElement('canvas');
     container.appendChild(canvas);
+
+    // WebGL is the real renderer; the 2D particle path below is the fallback
+    // for contexts that can't give us one (blocklisted drivers, mostly).
+    const gl = window.OrbGL ? window.OrbGL.create(canvas) : null;
+
     return {
       container,
       canvas,
-      ctx: canvas.getContext('2d'),
-      particles: null, // see buildOrbParticles
+      gl,
+      ctx: gl ? null : canvas.getContext('2d'),
+      particles: null, // see buildOrbParticles (2D fallback only)
       density: 0,
       angle: Math.random() * Math.PI * 2,
       speed: 0.18,
@@ -1220,15 +1255,24 @@
   function drawOrb(o, dt, now, animate) {
     const el = o.container;
     if (el.offsetWidth === 0) return; // hidden (e.g. onboarding step not shown)
-    if (!o.particles) buildOrbParticles(o, el.offsetWidth);
+    if (!o.gl && !o.particles) buildOrbParticles(o, el.offsetWidth);
 
     const dpr = window.devicePixelRatio || 1;
-    const pixelSize = Math.round(el.offsetWidth * 1.5 * dpr);
+    // The shader renders above CSS resolution and lets the browser downsample.
+    // That, plus the smoothstepped silhouette, is what removes the stair-
+    // stepping the old particle canvas had. Affordable because the shader is
+    // one analytic surface hit per pixel; still capped in absolute pixels so a
+    // HiDPI display can't turn a hero orb into megapixels of fragment work.
+    const scale = o.gl ? Math.min(2 * dpr, 512 / (el.offsetWidth * 1.5)) : dpr;
+    const pixelSize = Math.round(el.offsetWidth * 1.5 * scale);
     if (pixelSize <= 0) return;
     if (o.pixelSize !== pixelSize) {
       o.pixelSize = pixelSize;
-      o.canvas.width = pixelSize;
-      o.canvas.height = pixelSize;
+      if (o.gl) o.gl.setSize(pixelSize);
+      else {
+        o.canvas.width = pixelSize;
+        o.canvas.height = pixelSize;
+      }
     }
 
     const active = el.classList.contains('orb--active');
@@ -1249,6 +1293,22 @@
     if (o.burstStartedAt) {
       const t = (now - o.burstStartedAt) / 1000;
       burstScale = 1 + 0.45 * Math.exp(-t * 3.5) * Math.sin(Math.min(t * 9, Math.PI));
+    }
+
+    if (o.gl) {
+      const { body, hot, light } = orbGLColors();
+      o.gl.draw({
+        angle: o.angle,
+        // Frozen under reduced motion so the internal drift stops too, not
+        // just the spin — otherwise the cloud keeps churning in place.
+        time: animate ? now / 1000 : 0,
+        active: active ? 1 : 0,
+        burst: burstScale - 1,
+        light,
+        body,
+        hot,
+      });
+      return;
     }
 
     const { accent, bgIsLight } = getOrbPalette();
