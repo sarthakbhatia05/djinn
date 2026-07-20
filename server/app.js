@@ -8,6 +8,7 @@ const { createDirectoriesRouter } = require('./routes/directories');
 const { createSettingsRouter } = require('./routes/settings');
 const { createCommandsRouter } = require('./routes/commands');
 const { createClaudeConfigRouter } = require('./routes/claudeConfig');
+const { createMcpRouter } = require('./routes/mcp');
 
 function createApp(deps = {}) {
   const app = express();
@@ -26,6 +27,7 @@ function createApp(deps = {}) {
   app.use('/api/settings', createSettingsRouter(deps));
   app.use('/api/commands', createCommandsRouter(deps));
   app.use('/api/claude-defaults', createClaudeConfigRouter(deps));
+  app.use('/api/mcp', createMcpRouter(deps));
 
   return app;
 }

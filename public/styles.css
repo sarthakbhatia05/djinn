@@ -1050,6 +1050,75 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   font-size: 11.5px;
   color: var(--text-faint);
 }
+
+/* ---------- MCP server status panel ----------
+   `claude mcp list` live-checks each server over the network (~15s), so this
+   is fetched on demand (button click) only — never on open, never polled. */
+.mcp-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.mcp-panel[hidden] { display: none; }
+.mcp-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.mcp-panel-body {
+  padding: 4px 12px;
+}
+.mcp-panel-loading,
+.mcp-panel-empty,
+.mcp-panel-error {
+  padding: 10px 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.mcp-panel-error { color: var(--warn); }
+.mcp-server-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.mcp-server-row:last-child { border-bottom: none; }
+.mcp-server-info { flex: 1; min-width: 0; }
+.mcp-server-name {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-server-target {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-status-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+}
+.mcp-status-badge--connected { color: var(--ok); border-color: var(--ok); }
+.mcp-status-badge--needs-auth { color: var(--warn); border-color: var(--warn); }
+.mcp-status-badge--pending { color: var(--text-faint); }
+.mcp-status-badge--error,
+.mcp-status-badge--unknown { color: var(--accent); border-color: var(--accent); }
+
 .detail-send-input {
   flex: 1;
   padding: 9px 12px;

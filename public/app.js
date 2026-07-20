@@ -732,6 +732,7 @@
       loadChatMessages(sessionId);
       watchSession(sessionId);
       closeSlashPopup();
+      closeMcpPanel();
     }
     // reflect the active card highlight without a full grid rebuild
     for (const child of document.getElementById('session-grid').children) {
@@ -1415,6 +1416,92 @@
     if (!result.path) return; // user cancelled the native dialog
     const input = document.getElementById('detail-send-input');
     if (input) insertTextAtCursor(input, `@${result.path} `);
+  }
+
+  // ---------- MCP server status panel ----------
+  //
+  // `claude mcp list` live-checks each server over the network (~15s in
+  // testing), so this only ever runs when the user clicks the button —
+  // never on drawer open, never polled.
+
+  function closeMcpPanel() {
+    const panel = document.getElementById('mcp-panel');
+    if (panel) panel.hidden = true;
+  }
+
+  async function checkMcpStatus() {
+    const sessionId = state.activeDetailId;
+    if (!sessionId) return;
+    const session = state.sessions.find((s) => s.id === sessionId);
+    const projectPath = session && session.projectPath;
+    const panel = document.getElementById('mcp-panel');
+    const body = document.getElementById('mcp-panel-body');
+    if (!panel || !body) return;
+
+    panel.hidden = false;
+    body.innerHTML = '';
+    if (!projectPath) {
+      const err = document.createElement('div');
+      err.className = 'mcp-panel-error';
+      err.textContent = "Couldn't determine this session's project directory.";
+      body.appendChild(err);
+      return;
+    }
+
+    const loading = document.createElement('div');
+    loading.className = 'mcp-panel-loading';
+    loading.textContent = 'Checking MCP server status… this can take up to 15s.';
+    body.appendChild(loading);
+
+    const result = await guarded(
+      fetchJson(`/api/mcp/status?cwd=${encodeURIComponent(projectPath)}`),
+      'Failed to check MCP server status'
+    );
+    // The user may have closed the panel or switched sessions while this was in flight.
+    if (panel.hidden || state.activeDetailId !== sessionId) return;
+
+    body.innerHTML = '';
+    if (result === null) {
+      const err = document.createElement('div');
+      err.className = 'mcp-panel-error';
+      err.textContent = 'Failed to check MCP server status.';
+      body.appendChild(err);
+      return;
+    }
+
+    const servers = result.servers || [];
+    if (servers.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'mcp-panel-empty';
+      empty.textContent = 'No MCP servers configured for this project.';
+      body.appendChild(empty);
+      return;
+    }
+
+    for (const server of servers) {
+      const row = document.createElement('div');
+      row.className = 'mcp-server-row';
+
+      const info = document.createElement('div');
+      info.className = 'mcp-server-info';
+      const name = document.createElement('div');
+      name.className = 'mcp-server-name';
+      name.textContent = server.name;
+      const target = document.createElement('div');
+      target.className = 'mcp-server-target';
+      target.textContent = server.target;
+      target.title = server.target;
+      info.appendChild(name);
+      info.appendChild(target);
+
+      const badge = document.createElement('span');
+      badge.className = `mcp-status-badge mcp-status-badge--${server.status}`;
+      badge.textContent = server.statusText || server.status;
+
+      row.appendChild(info);
+      row.appendChild(badge);
+      body.appendChild(row);
+    }
   }
 
   // ---------- new-session directory picker + command bar ----------
@@ -2199,6 +2286,12 @@
     detailInput.addEventListener('blur', () => closeSlashPopup());
 
     document.getElementById('detail-attach-btn').addEventListener('click', browseForFile);
+    document.getElementById('detail-mcp-btn').addEventListener('click', () => {
+      const panel = document.getElementById('mcp-panel');
+      if (panel && !panel.hidden) { closeMcpPanel(); return; }
+      checkMcpStatus();
+    });
+    document.getElementById('mcp-panel-close').addEventListener('click', closeMcpPanel);
 
     // Model / permission-mode selectors: same preference mirrored in both the
     // command bar and the drawer footer.

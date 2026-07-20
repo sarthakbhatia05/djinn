@@ -14,6 +14,7 @@ const { pickFolder } = require('./lib/folderPicker');
 const { pickFile } = require('./lib/filePicker');
 const { listSlashCommands } = require('./lib/slashCommands');
 const { getClaudeUserDefaults } = require('./lib/claudeUserConfig');
+const { createMcpStatus } = require('./lib/mcpStatus');
 
 const PORT = process.env.PORT || 4317;
 const dataDir = path.join(__dirname, '..', 'data');
@@ -42,8 +43,9 @@ const folderPicker = { pickFolder };
 const filePicker = { pickFile };
 const slashCommands = { listSlashCommands };
 const claudeUserConfig = { getClaudeUserDefaults };
+const mcpStatus = createMcpStatus();
 
-const app = createApp({ sessionStore, claudeCli, backlogStore, memoryStore, recentDirectories, settingsStore, folderPicker, filePicker, slashCommands, claudeUserConfig });
+const app = createApp({ sessionStore, claudeCli, backlogStore, memoryStore, recentDirectories, settingsStore, folderPicker, filePicker, slashCommands, claudeUserConfig, mcpStatus });
 const server = http.createServer(app);
 
 const transcriptWatcher = createTranscriptWatcher({

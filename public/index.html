@@ -253,6 +253,14 @@
               <option value="manual">Manual</option>
             </select>
             <button type="button" class="ghost drawer-ctl detail-attach-btn" id="detail-attach-btn" title="Insert a file path">@</button>
+            <button type="button" class="ghost drawer-ctl detail-mcp-btn" id="detail-mcp-btn" title="Check MCP server status for this project">MCP</button>
+          </div>
+          <div class="mcp-panel" id="mcp-panel" hidden>
+            <div class="mcp-panel-header">
+              <span class="eyebrow">MCP Servers</span>
+              <button type="button" class="ghost drawer-ctl mcp-panel-close" id="mcp-panel-close" title="Close">×</button>
+            </div>
+            <div class="mcp-panel-body" id="mcp-panel-body"></div>
           </div>
           <div class="drawer-footer-send-row">
             <input class="mono detail-send-input" id="detail-send-input" placeholder="Send an instruction to this agent… (/ for commands)">
