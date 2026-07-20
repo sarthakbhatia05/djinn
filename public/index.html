@@ -9,11 +9,29 @@
 <link rel="stylesheet" href="/styles.css">
 <script>
   (function () {
+    var STORAGE_KEY = 'djinn.theme';
     function apply(t) { document.documentElement.setAttribute('data-theme', t); }
+    function readStored() {
+      try {
+        var v = localStorage.getItem(STORAGE_KEY);
+        return v === 'light' || v === 'dark' ? v : null;
+      } catch (e) {
+        return null; // private mode / storage disabled — fall back to prefers-color-scheme
+      }
+    }
+    function writeStored(t) {
+      try { localStorage.setItem(STORAGE_KEY, t); } catch (e) { /* non-fatal */ }
+    }
+    // Apply any stored preference before first paint so there's no flash of
+    // the wrong theme. With nothing stored, the existing prefers-color-scheme
+    // media query in styles.css already handles the fallback on its own.
+    var stored = readStored();
+    if (stored) apply(stored);
     window.__toggleTheme = function () {
       var cur = document.documentElement.getAttribute('data-theme');
       var next = cur === 'light' ? 'dark' : (cur === 'dark' ? 'light' : (window.matchMedia('(prefers-color-scheme: light)').matches ? 'dark' : 'light'));
       apply(next);
+      writeStored(next);
     };
   })();
 </script>
@@ -217,6 +235,7 @@
             <div class="drawer-status-row">
               <div class="status-dot" id="detail-status-dot"></div>
               <div class="eyebrow" id="detail-status-label"></div>
+              <button type="button" class="ghost detail-cancel-btn" id="detail-cancel-btn" title="Cancel this running session" hidden>Stop</button>
             </div>
             <div class="detail-title" id="detail-title"></div>
             <div class="mono detail-meta" id="detail-meta"></div>
@@ -319,6 +338,18 @@
     <div class="onboarding-actions">
       <button class="btn dotnum onboarding-confirm-btn" id="projects-modal-save">Save</button>
     </div>
+  </div>
+</div>
+
+<!-- Quick switcher (Cmd/Ctrl+K) -->
+<div class="quick-switcher-overlay" id="quick-switcher-overlay" hidden>
+  <div class="quick-switcher-panel">
+    <div class="search-box quick-switcher-search">
+      <span class="quick-switcher-search-icon">⌕</span>
+      <input class="mono quick-switcher-input" id="quick-switcher-input" placeholder="Jump to a session by title or project…" autocomplete="off">
+      <span class="hint quick-switcher-kbd">esc</span>
+    </div>
+    <div class="quick-switcher-results" id="quick-switcher-results"></div>
   </div>
 </div>
 
