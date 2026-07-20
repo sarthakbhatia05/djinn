@@ -29,6 +29,26 @@ function createApp(deps = {}) {
   app.use('/api/claude-defaults', createClaudeConfigRouter(deps));
   app.use('/api/mcp', createMcpRouter(deps));
 
+  // Centralized error handler. Any route that calls next(err) — or, for an
+  // async handler, rejects via the asyncHandler wrapper — lands here instead
+  // of falling through to Express's default HTML error page, which the
+  // frontend's fetchJson can't parse. Keeps deliberate 4xx validation
+  // responses (which routes send directly via res.status().json()) as-is;
+  // this only covers thrown/rejected errors.
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    const status = typeof err.status === 'number' ? err.status : 500;
+    // Never leak raw internal error messages (stack traces, file paths, etc.)
+    // for unexpected 5xx failures — only pass through err.message when a
+    // handler explicitly set a 4xx status on the error.
+    const message = status < 500 && err.message ? err.message : 'Internal server error';
+    res.status(status).json({ error: message });
+  });
+
   return app;
 }
 

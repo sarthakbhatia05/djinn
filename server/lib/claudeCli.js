@@ -19,7 +19,11 @@ function createClaudeCli({ spawnFn = spawn, claudeBin = 'claude', onStatusChange
   function runOneShot(args, cwd, trackId) {
     return new Promise((resolve, reject) => {
       const child = spawnFn(claudeBin, args, { cwd });
-      running.set(trackId, { child });
+      // `entry` is the exact object stored in `running` — cancel() mutates
+      // this same reference (entry.cancelled = true) so the close handler
+      // below can tell a caller-initiated kill apart from a real crash.
+      const entry = { child, cancelled: false };
+      running.set(trackId, entry);
       onStatusChange(trackId, 'running');
 
       let stdout = '';
@@ -40,7 +44,11 @@ function createClaudeCli({ spawnFn = spawn, claudeBin = 'claude', onStatusChange
       child.on('error', (err) => finish(err));
       child.on('close', (code) => {
         if (code !== 0) {
-          finish(new Error(`claude exited with code ${code}: ${stderr}`));
+          if (entry.cancelled) {
+            finish(Object.assign(new Error('cancelled'), { cancelled: true }));
+          } else {
+            finish(new Error(`claude exited with code ${code}: ${stderr}`));
+          }
           return;
         }
         try {
@@ -50,6 +58,19 @@ function createClaudeCli({ spawnFn = spawn, claudeBin = 'claude', onStatusChange
         }
       });
     });
+  }
+
+  // Kills the child process tracked under trackId, if any. Returns true when
+  // a process was found and killed, false when nothing was running under
+  // that id (nothing to cancel). The actual cleanup (deleting the running-map
+  // entry, firing onStatusChange('idle')) happens in the 'close' handler
+  // above once the kill takes effect, not here.
+  function cancel(trackId) {
+    const entry = running.get(trackId);
+    if (!entry) return false;
+    entry.cancelled = true;
+    entry.child.kill();
+    return true;
   }
 
   // Appends --model/--permission-mode when given a non-empty string. Values
@@ -77,7 +98,7 @@ function createClaudeCli({ spawnFn = spawn, claudeBin = 'claude', onStatusChange
     return runOneShot(args, cwd, sessionId);
   }
 
-  return { isRunning, startSession, sendMessage, getActiveCount, getActiveIds };
+  return { isRunning, startSession, sendMessage, getActiveCount, getActiveIds, cancel };
 }
 
 module.exports = { createClaudeCli };

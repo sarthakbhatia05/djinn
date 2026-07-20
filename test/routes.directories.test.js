@@ -75,3 +75,23 @@ test('POST /api/directories/browse-file returns 500 when the picker rejects', as
   assert.ok(body.error);
   server.close();
 });
+
+test('GET /api/directories/recent returns JSON (not HTML) when recentDirectories.list throws', async () => {
+  const deps = makeDeps({ recentDirectories: { list: () => { throw new Error('boom'); }, add: () => {} }, folderPicker: { pickFolder: async () => null } });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'GET', '/api/directories/recent');
+  assert.strictEqual(status, 500);
+  assert.ok(body && body.error);
+  server.close();
+});
+
+test('POST /api/directories/browse returns JSON (not HTML) when the picker rejects', async () => {
+  const deps = makeDeps({ recentDirectories: { list: () => [], add: () => {} }, folderPicker: { pickFolder: async () => { throw new Error('picker blew up'); } } });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'POST', '/api/directories/browse');
+  assert.strictEqual(status, 500);
+  assert.ok(body && body.error);
+  server.close();
+});
