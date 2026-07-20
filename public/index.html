@@ -122,6 +122,20 @@
               </div>
             </div>
             <input class="mono command-input" id="command-input" placeholder="research the billing webhook failures and propose a fix">
+            <select class="control-select" id="command-model-select" title="Model — Default leaves this unset, so Claude Code uses whatever model your CLI is normally configured to use">
+              <option value="">Default</option>
+              <option value="claude-opus-4-8">Opus</option>
+              <option value="claude-sonnet-5">Sonnet</option>
+              <option value="claude-haiku-4-5-20251001">Haiku</option>
+              <option value="claude-fable-5">Fable</option>
+            </select>
+            <select class="control-select" id="command-permission-select" title="Permission mode — Default leaves this unset, so Claude Code uses its normal permission behavior (asks before risky actions)">
+              <option value="">Default</option>
+              <option value="plan">Plan</option>
+              <option value="acceptEdits">Accept Edits</option>
+              <option value="bypassPermissions">Bypass Permissions</option>
+              <option value="manual">Manual</option>
+            </select>
             <button class="btn dotnum command-send-btn" id="command-send-btn">Send</button>
           </div>
           <div class="command-pills">
@@ -171,18 +185,25 @@
             <div class="eyebrow section-header-title">MEMORY</div>
             <div class="mono section-header-sub">Notes carried into every agent session</div>
           </div>
+          <div class="mono memory-scope-note">Stored by this dashboard for your reference — not automatically loaded into Claude Code sessions.</div>
 
           <div class="memory-section">
             <div class="eyebrow memory-section-label">Common memory (applies to all projects)</div>
             <textarea class="memory-textarea" id="memory-common-text" placeholder="Notes that should apply across every project…"></textarea>
-            <button class="memory-save-btn" id="memory-common-save">Save</button>
+            <div class="memory-save-row">
+              <button class="memory-save-btn" id="memory-common-save">Save</button>
+              <span class="mono memory-status" id="memory-common-status"></span>
+            </div>
           </div>
 
           <div class="memory-section">
             <div class="eyebrow memory-section-label">Project memory</div>
             <select class="memory-select" id="memory-project-select"></select>
             <textarea class="memory-textarea" id="memory-project-text" placeholder="Notes specific to the selected project…"></textarea>
-            <button class="memory-save-btn" id="memory-project-save">Save</button>
+            <div class="memory-save-row">
+              <button class="memory-save-btn" id="memory-project-save">Save</button>
+              <span class="mono memory-status" id="memory-project-status"></span>
+            </div>
           </div>
         </div>
 
@@ -190,6 +211,7 @@
 
       <!-- Detail drawer -->
       <div class="drawer" id="detail-drawer" style="display:none">
+        <div class="drawer-resize-handle" id="drawer-resize-handle" title="Drag to resize"></div>
         <div class="drawer-header">
           <div>
             <div class="drawer-status-row">
@@ -214,8 +236,28 @@
         </div>
 
         <div class="drawer-footer">
-          <input class="mono detail-send-input" id="detail-send-input" placeholder="Send an instruction to this agent…">
-          <button class="btn dotnum detail-send-btn" id="detail-send-btn">Send</button>
+          <div class="slash-popup" id="slash-popup" hidden></div>
+          <div class="drawer-footer-controls">
+            <select class="control-select" id="detail-model-select" title="Model — Default leaves this unset, so Claude Code uses whatever model your CLI is normally configured to use">
+              <option value="">Default</option>
+              <option value="claude-opus-4-8">Opus</option>
+              <option value="claude-sonnet-5">Sonnet</option>
+              <option value="claude-haiku-4-5-20251001">Haiku</option>
+              <option value="claude-fable-5">Fable</option>
+            </select>
+            <select class="control-select" id="detail-permission-select" title="Permission mode — Default leaves this unset, so Claude Code uses its normal permission behavior (asks before risky actions)">
+              <option value="">Default</option>
+              <option value="plan">Plan</option>
+              <option value="acceptEdits">Accept Edits</option>
+              <option value="bypassPermissions">Bypass Permissions</option>
+              <option value="manual">Manual</option>
+            </select>
+            <button type="button" class="ghost drawer-ctl detail-attach-btn" id="detail-attach-btn" title="Insert a file path">@</button>
+          </div>
+          <div class="drawer-footer-send-row">
+            <input class="mono detail-send-input" id="detail-send-input" placeholder="Send an instruction to this agent… (/ for commands)">
+            <button class="btn dotnum detail-send-btn" id="detail-send-btn">Send</button>
+          </div>
         </div>
       </div>
 

@@ -12,12 +12,17 @@ function makeFakeWs() {
   return ws;
 }
 
+// The returned watcher is an EventEmitter because that is what makes an
+// unhandled 'error' event throw — a plain object would hide the very failure
+// mode these tests need to cover.
 function makeFakeWatch() {
-  const active = new Map(); // path -> { listener, closed }
+  const active = new Map(); // path -> { listener, closed, watcher }
   const watchFn = (filePath, listener) => {
-    const entry = { listener, closed: false };
+    const watcher = new EventEmitter();
+    const entry = { listener, closed: false, watcher };
+    watcher.close = () => { entry.closed = true; };
     active.set(filePath, entry);
-    return { close: () => { entry.closed = true; } };
+    return watcher;
   };
   return { active, watchFn };
 }
@@ -89,4 +94,28 @@ test('a duplicate watch for the same session does not stack watchers', () => {
   ws.emit('message', JSON.stringify({ type: 'watch', sessionId: 'known-1' }));
   active.get('/transcripts/known-1.jsonl').listener();
   assert.strictEqual(ws.sent.length, 1);
+});
+
+// On Windows, fs.watch emits 'error' (typically EPERM) when the watched file is
+// renamed or deleted — and Claude Code rotates transcripts under us. An
+// EventEmitter with no 'error' listener throws, which with no uncaughtException
+// handler takes the whole server down and makes every view fail to fetch.
+test('an fs.watch error event is handled instead of crashing the process', () => {
+  const { active, ws } = makeSetup();
+  ws.emit('message', JSON.stringify({ type: 'watch', sessionId: 'known-1' }));
+  const entry = active.get('/transcripts/known-1.jsonl');
+  const eperm = Object.assign(new Error('EPERM: operation not permitted, watch'), { code: 'EPERM' });
+  assert.doesNotThrow(() => entry.watcher.emit('error', eperm));
+});
+
+test('a watcher that errors is torn down so it cannot be reused', () => {
+  const { active, ws } = makeSetup();
+  ws.emit('message', JSON.stringify({ type: 'watch', sessionId: 'known-1' }));
+  const entry = active.get('/transcripts/known-1.jsonl');
+  entry.watcher.emit('error', new Error('EPERM'));
+  assert.strictEqual(entry.closed, true, 'expected the dead watcher to be closed');
+  // Re-watching must be possible after the failure, not blocked by a stale entry.
+  ws.emit('message', JSON.stringify({ type: 'watch', sessionId: 'known-1' }));
+  active.get('/transcripts/known-1.jsonl').listener();
+  assert.deepStrictEqual(ws.sent, [{ type: 'transcript-update', sessionId: 'known-1' }]);
 });

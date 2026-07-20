@@ -1,15 +1,16 @@
-// server/lib/folderPicker.js
+// server/lib/filePicker.js
 //
-// Cross-platform "pick a folder" dialog.
-//   win32  -> PowerShell System.Windows.Forms.FolderBrowserDialog
-//   darwin -> osascript `choose folder`
+// Cross-platform "pick a file" dialog — the single-file counterpart to
+// folderPicker.js. Same structure and same platform quirks apply here:
+//   win32  -> PowerShell System.Windows.Forms.OpenFileDialog
+//   darwin -> osascript `choose file`
 //   linux  -> zenity, falling back to kdialog, falling back to null
 //
 // Resolves the chosen absolute path, or null when the user cancels or no
 // dialog tool is available. Rejects only on real failures.
 const { spawn } = require('child_process');
 
-// A folder can never be literally this, so it is safe as an out-of-band signal.
+// A file path can never be literally this, so it is safe as an out-of-band signal.
 const CANCEL_SENTINEL = '__CANCELLED__';
 
 // A dialog nobody can see would otherwise block the HTTP request forever —
@@ -17,9 +18,9 @@ const CANCEL_SENTINEL = '__CANCELLED__';
 // ever cut it loose, and each retry click would strand another powershell.exe.
 const DEFAULT_TIMEOUT_MS = 4 * 60 * 1000;
 
-// FolderBrowserDialog has no TopMost property, and an ownerless ShowDialog()
+// OpenFileDialog has no TopMost property, and an ownerless ShowDialog()
 // cannot take foreground while the browser holds the Windows foreground lock
-// (the user's click on the browse button is exactly what arms that lock). The
+// (the user's click on the attach button is exactly what arms that lock). The
 // dialog then opens *behind* the browser and looks like nothing happened.
 // Giving it a topmost owner form makes it inherit that z-order instead.
 //
@@ -40,10 +41,9 @@ try {
   $owner.Show()
   $owner.Activate()
   try {
-    $f = New-Object System.Windows.Forms.FolderBrowserDialog
-    $f.Description = 'Pick a project directory'
-    $f.ShowNewFolderButton = $true
-    if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.SelectedPath }
+    $f = New-Object System.Windows.Forms.OpenFileDialog
+    $f.Multiselect = $false
+    if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.FileName }
     else { Write-Output '${CANCEL_SENTINEL}' }
   } finally {
     $owner.Close()
@@ -97,24 +97,24 @@ async function pickWindows(spawnFn, timeoutMs) {
   );
   if (result.spawnError) throw result.spawnError;
   if (result.timedOut) {
-    throw new Error('The folder picker timed out — the dialog never came back.');
+    throw new Error('The file picker timed out — the dialog never came back.');
   }
   // Checked without regard to exit code: PowerShell reports non-terminating
   // errors on stderr while still exiting 0.
   if (result.stderr.trim()) throw new Error(result.stderr.trim());
   if (result.code !== 0) {
-    throw new Error(`The folder picker exited with code ${result.code}.`);
+    throw new Error(`The file picker exited with code ${result.code}.`);
   }
   const picked = pathOrNull(result.stdout);
   if (picked === CANCEL_SENTINEL) return null;
   if (picked === null) {
-    throw new Error('The folder picker closed without returning a selection.');
+    throw new Error('The file picker closed without returning a selection.');
   }
   return picked;
 }
 
 async function pickMac(spawnFn) {
-  const result = await runDialog(spawnFn, 'osascript', ['-e', 'POSIX path of (choose folder)']);
+  const result = await runDialog(spawnFn, 'osascript', ['-e', 'POSIX path of (choose file)']);
   if (result.spawnError) throw result.spawnError;
   if (result.code !== 0) {
     // Cancelling the dialog makes osascript exit non-zero with
@@ -122,11 +122,7 @@ async function pickMac(spawnFn) {
     if (/user cancell?ed/i.test(result.stderr)) return null;
     throw new Error(result.stderr.trim() || `osascript exited with code ${result.code}`);
   }
-  const picked = pathOrNull(result.stdout);
-  if (picked === null) return null;
-  // `POSIX path of` returns a trailing slash; strip it (but keep bare "/").
-  const stripped = picked.replace(/\/+$/, '');
-  return stripped.length > 0 ? stripped : '/';
+  return pathOrNull(result.stdout);
 }
 
 function linuxOutcome(result) {
@@ -139,11 +135,11 @@ function linuxOutcome(result) {
 }
 
 async function pickLinux(spawnFn) {
-  const zenity = await runDialog(spawnFn, 'zenity', ['--file-selection', '--directory']);
+  const zenity = await runDialog(spawnFn, 'zenity', ['--file-selection']);
   if (!zenity.spawnError) return linuxOutcome(zenity);
   if (zenity.spawnError.code !== 'ENOENT') throw zenity.spawnError;
 
-  const kdialog = await runDialog(spawnFn, 'kdialog', ['--getexistingdirectory']);
+  const kdialog = await runDialog(spawnFn, 'kdialog', ['--getopenfilename']);
   if (!kdialog.spawnError) return linuxOutcome(kdialog);
   if (kdialog.spawnError.code !== 'ENOENT') throw kdialog.spawnError;
 
@@ -151,10 +147,10 @@ async function pickLinux(spawnFn) {
   return null;
 }
 
-function pickFolder({ spawnFn = spawn, platform = process.platform, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+function pickFile({ spawnFn = spawn, platform = process.platform, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   if (platform === 'win32') return pickWindows(spawnFn, timeoutMs);
   if (platform === 'darwin') return pickMac(spawnFn);
   return pickLinux(spawnFn);
 }
 
-module.exports = { pickFolder };
+module.exports = { pickFile };

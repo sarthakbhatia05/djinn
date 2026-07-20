@@ -77,6 +77,54 @@ test('POST /api/sessions starts a session and records the recent directory', asy
   server.close();
 });
 
+test('POST /api/sessions passes model and permissionMode through to claudeCli.startSession', async () => {
+  const calls = [];
+  const deps = makeDeps({
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async (cwd, message, options) => { calls.push({ cwd, message, options }); return { session_id: 'new-1', result: 'ok' }; },
+      sendMessage: async () => ({}),
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  await request(port, 'POST', '/api/sessions', { cwd: 'D:\\demo', message: 'go', model: 'claude-opus-4', permissionMode: 'plan' });
+  assert.deepStrictEqual(calls[0].options, { model: 'claude-opus-4', permissionMode: 'plan' });
+  server.close();
+});
+
+test('POST /api/sessions without model/permissionMode passes them through as undefined', async () => {
+  const calls = [];
+  const deps = makeDeps({
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async (cwd, message, options) => { calls.push({ cwd, message, options }); return { session_id: 'new-1', result: 'ok' }; },
+      sendMessage: async () => ({}),
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  await request(port, 'POST', '/api/sessions', { cwd: 'D:\\demo', message: 'go' });
+  assert.deepStrictEqual(calls[0].options, { model: undefined, permissionMode: undefined });
+  server.close();
+});
+
+test('POST /api/sessions/:id/message passes model and permissionMode through to claudeCli.sendMessage', async () => {
+  const calls = [];
+  const deps = makeDeps({
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async () => ({}),
+      sendMessage: async (sessionId, cwd, message, options) => { calls.push({ sessionId, cwd, message, options }); return { session_id: 's1', result: 'ok' }; },
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  await request(port, 'POST', '/api/sessions/s1/message', { message: 'go', model: 'claude-sonnet-4', permissionMode: 'acceptEdits' });
+  assert.deepStrictEqual(calls[0].options, { model: 'claude-sonnet-4', permissionMode: 'acceptEdits' });
+  server.close();
+});
+
 test('POST /api/sessions/:id/message 404s for an unknown session', async () => {
   const server = createApp(makeDeps()).listen(0);
   const { port } = server.address();

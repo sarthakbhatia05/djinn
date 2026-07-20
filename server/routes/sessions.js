@@ -28,13 +28,13 @@ function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, sett
   });
 
   router.post('/', async (req, res) => {
-    const { cwd, message } = req.body;
+    const { cwd, message, model, permissionMode } = req.body;
     if (!cwd || !message) {
       res.status(400).json({ error: 'cwd and message are required' });
       return;
     }
     try {
-      const result = await claudeCli.startSession(cwd, message);
+      const result = await claudeCli.startSession(cwd, message, { model, permissionMode });
       recentDirectories.add(cwd);
       // Starting a session in an untracked directory implies the user wants
       // to see it — add it to the allowlist so it doesn't vanish from view.
@@ -55,7 +55,7 @@ function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, sett
   });
 
   router.post('/:id/message', async (req, res) => {
-    const { message } = req.body;
+    const { message, model, permissionMode } = req.body;
     if (!message) {
       res.status(400).json({ error: 'message is required' });
       return;
@@ -72,7 +72,7 @@ function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, sett
       return;
     }
     try {
-      const result = await claudeCli.sendMessage(req.params.id, session.projectPath, message);
+      const result = await claudeCli.sendMessage(req.params.id, session.projectPath, message, { model, permissionMode });
       res.json(result);
     } catch (err) {
       res.status(502).json({ error: err.message });

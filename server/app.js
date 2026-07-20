@@ -6,6 +6,8 @@ const { createBacklogRouter } = require('./routes/backlog');
 const { createMemoryRouter } = require('./routes/memory');
 const { createDirectoriesRouter } = require('./routes/directories');
 const { createSettingsRouter } = require('./routes/settings');
+const { createCommandsRouter } = require('./routes/commands');
+const { createClaudeConfigRouter } = require('./routes/claudeConfig');
 
 function createApp(deps = {}) {
   const app = express();
@@ -22,6 +24,8 @@ function createApp(deps = {}) {
   app.use('/api/memory', createMemoryRouter(deps));
   app.use('/api/directories', createDirectoriesRouter(deps));
   app.use('/api/settings', createSettingsRouter(deps));
+  app.use('/api/commands', createCommandsRouter(deps));
+  app.use('/api/claude-defaults', createClaudeConfigRouter(deps));
 
   return app;
 }

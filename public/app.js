@@ -11,6 +11,7 @@
     settings: null,
     drawerSize: readDrawerSize(), // function declarations hoist, so this is fine
     drawerMinimized: false,
+    drawerWidthPx: readDrawerWidthPx(),
   };
 
   // ---------- assistant identity + tracked projects ----------
@@ -52,13 +53,55 @@
 
   // ---------- fetch helper ----------
 
+  // Rolling record of every request failure, so an intermittent "Failed to
+  // fetch" can be diagnosed after the fact instead of having to be caught live.
+  // Read it from the console with `__dashboardDiag()`.
+  const diagLog = [];
+  function recordDiag(entry) {
+    diagLog.push({ at: new Date().toISOString(), ...entry });
+    if (diagLog.length > 100) diagLog.shift();
+  }
+  window.__dashboardDiag = () => {
+    console.table(diagLog);
+    return diagLog;
+  };
+
   async function fetchJson(url, options) {
-    const res = await fetch(url, options);
+    const method = (options && options.method) || 'GET';
+    const startedAt = performance.now();
+    let res;
+    try {
+      res = await fetch(url, options);
+    } catch (err) {
+      // fetch() rejects (rather than resolving with a bad status) only when the
+      // request never completed at the transport layer. The browser's message
+      // for this is the bare, endpoint-less string "Failed to fetch", so tag it
+      // with what we actually asked for.
+      const elapsed = Math.round(performance.now() - startedAt);
+      recordDiag({ kind: 'network', method, url, elapsedMs: elapsed, raw: String(err && err.message) });
+      const tagged = new Error(`${method} ${url} never completed (${elapsed}ms): ${err && err.message}`);
+      tagged.isNetworkError = true;
+      tagged.url = url;
+      throw tagged;
+    }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
+      recordDiag({ kind: 'http', method, url, status: res.status });
       throw new Error(body.error || `${res.status} ${res.statusText}`);
     }
     return res.status === 204 ? null : res.json();
+  }
+
+  // Distinguishes the two ways a request can fail to complete: the server is
+  // gone (it crashed) versus the server is fine and a single pooled socket was
+  // torn down under us. Only the second is survivable by retrying.
+  async function probeServerAlive() {
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store' });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   // ---------- toast (lightweight, visible feedback for failures / missing input) ----------
@@ -97,6 +140,16 @@
       return await promise;
     } catch (err) {
       console.error(fallbackMessage, err);
+      if (err && err.isNetworkError) {
+        const alive = await probeServerAlive();
+        recordDiag({ kind: 'verdict', url: err.url, serverAlive: alive });
+        showToast(
+          alive
+            ? `${fallbackMessage} — connection dropped, server is still up. Retrying on the next refresh.`
+            : `${fallbackMessage} — the dashboard server is not responding. Restart it with "npm start".`
+        );
+        return null;
+      }
       showToast(err && err.message ? err.message : fallbackMessage);
       return null;
     }
@@ -112,6 +165,7 @@
     if (sessions === null) return;
     state.sessions = sessions;
     state.activeCount = activeCountResult ? activeCountResult.activeCount : 0;
+    seedViewedBaseline();
     renderSessions();
     updateHeaderStats();
     updateOpenDetailIfPresent();
@@ -138,6 +192,87 @@
     return session.isRunning ? 'running' : 'idle';
   }
 
+  // ---------- seen/unseen tracking ----------
+  //
+  // A session is "unseen" when its lastActivity is newer than the last time
+  // this browser opened its detail drawer. There's no server-side signal for
+  // this (sessions have no read/unread concept), so it's tracked entirely in
+  // localStorage, per browser.
+  //
+  // Two wrinkles this accounts for:
+  //  - On the very first load this feature ever runs in a browser, every
+  //    session that already exists would otherwise show as "unseen" (nothing
+  //    has a stored viewedAt yet). seedViewedBaseline() stamps all
+  //    currently-known sessions as viewed-as-of-now exactly once per page
+  //    load, so history doesn't light up as new.
+  //  - A session this browser just spawned (new-session composer or "Ship")
+  //    shouldn't show unseen either, even though it has no prior baseline
+  //    entry. markSessionsSeenSince() diffs session ids before/after the
+  //    spawn and stamps any that appeared as viewed immediately.
+  const VIEWED_SESSIONS_KEY = 'djinn.viewedSessions';
+  let viewedBaselineSeeded = false;
+
+  function readViewedMap() {
+    try {
+      const raw = localStorage.getItem(VIEWED_SESSIONS_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeViewedMap(map) {
+    try {
+      localStorage.setItem(VIEWED_SESSIONS_KEY, JSON.stringify(map));
+    } catch {
+      // private mode / storage disabled — non-fatal, just won't persist
+    }
+  }
+
+  function markSessionViewed(sessionId) {
+    const map = readViewedMap();
+    map[sessionId] = new Date().toISOString();
+    writeViewedMap(map);
+  }
+
+  function seedViewedBaseline() {
+    if (viewedBaselineSeeded) return;
+    viewedBaselineSeeded = true;
+    const map = readViewedMap();
+    let changed = false;
+    for (const s of state.sessions) {
+      if (!(s.id in map)) {
+        map[s.id] = s.lastActivity || new Date().toISOString();
+        changed = true;
+      }
+    }
+    if (changed) writeViewedMap(map);
+  }
+
+  // Call with the set of session ids known before an action that may have
+  // spawned a new one; any id present now that wasn't in that set is marked
+  // viewed, since this browser just created it.
+  function markSessionsSeenSince(priorIds) {
+    const map = readViewedMap();
+    let changed = false;
+    for (const s of state.sessions) {
+      if (!priorIds.has(s.id) && !(s.id in map)) {
+        map[s.id] = new Date().toISOString();
+        changed = true;
+      }
+    }
+    if (changed) writeViewedMap(map);
+  }
+
+  function isSessionUnseen(session) {
+    if (!session.lastActivity) return false;
+    const map = readViewedMap();
+    const viewedAt = map[session.id];
+    if (!viewedAt) return true;
+    return new Date(session.lastActivity).getTime() > new Date(viewedAt).getTime();
+  }
+
   // ---------- sessions grid (incremental render so the one-time card-in
   // animation defined on the base .card class doesn't replay on every poll) ----------
 
@@ -149,6 +284,7 @@
         <div class="card-status">
           <span class="status-dot"></span>
           <span class="eyebrow card-status-label"></span>
+          <span class="card-unseen-badge" title="New activity since you last opened this"></span>
         </div>
         <span class="dotnum card-time"></span>
       </div>
@@ -169,6 +305,9 @@
     label.textContent = status === 'running' ? 'Running' : 'Idle';
     label.classList.toggle('card-status-label--running', status === 'running');
     label.classList.toggle('card-status-label--done', status !== 'running');
+
+    const unseenBadge = card.querySelector('.card-unseen-badge');
+    if (unseenBadge) unseenBadge.classList.toggle('card-status-label--unseen', isSessionUnseen(session));
 
     card.querySelector('.card-time').textContent = formatRelativeTime(session.lastActivity);
     card.querySelector('.card-title').textContent = session.title || '(no summary yet)';
@@ -429,11 +568,15 @@
         const row = document.createElement('div');
         row.className = 'backlog-row';
         const priority = item.priority || 'medium';
+        // Static template only — item.title is user-supplied and is assigned
+        // via textContent below. Never interpolate it into innerHTML.
         row.innerHTML = `
           <input type="checkbox" class="backlog-checkbox" />
           <div class="backlog-row-title"></div>
           <div class="backlog-priority"></div>
           <div class="mono backlog-row-project"></div>
+          <button type="button" class="backlog-assign-btn">Ship &rarr;</button>
+          <button type="button" class="backlog-delete-btn" title="Remove from backlog">&times;</button>
         `;
         const checkbox = row.querySelector('.backlog-checkbox');
         checkbox.checked = !!item.done;
@@ -448,6 +591,18 @@
         priorityEl.classList.add(`backlog-priority--${priority}`);
 
         row.querySelector('.backlog-row-project').textContent = item.repoPath;
+
+        const shipBtn = row.querySelector('.backlog-assign-btn');
+        if (item.done) {
+          shipBtn.remove();
+        } else {
+          shipBtn.addEventListener('click', () => shipBacklogItem(item, shipBtn));
+        }
+
+        row
+          .querySelector('.backlog-delete-btn')
+          .addEventListener('click', () => deleteBacklogItem(item));
+
         list.appendChild(row);
       }
     }
@@ -467,6 +622,58 @@
       'Failed to update backlog item'
     );
     if (result === null) return;
+    await loadBacklog();
+  }
+
+  // Hands the item to a real Claude Code agent: its repoPath is already the
+  // `cwd` the sessions endpoint wants, and its title is already the prompt.
+  // This spawns a process and spends tokens, so the button is latched for the
+  // whole (potentially multi-minute) blocking request.
+  async function shipBacklogItem(item, button) {
+    if (!item.repoPath) {
+      showToast('This backlog item has no project directory, so it cannot be shipped.');
+      return;
+    }
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = 'Shipping…';
+    showToast(`${assistantName()} is on it — ${item.title}`, false);
+    const result = await guarded(
+      fetchJson('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd: item.repoPath, message: item.title }),
+      }),
+      'Failed to ship backlog item'
+    );
+    if (result === null) {
+      button.disabled = false;
+      button.textContent = 'Ship →';
+      return;
+    }
+    // Close the loop using the status field that already exists.
+    await guarded(
+      fetchJson(`/api/backlog/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ done: true }),
+      }),
+      'Shipped, but failed to mark the backlog item done'
+    );
+    showToast(`${assistantName()} finished — session added.`, false);
+    await Promise.all([loadSessions(), loadProjects(), loadBacklog(), loadRecentDirectories()]);
+  }
+
+  async function deleteBacklogItem(item) {
+    if (!window.confirm(`Remove "${item.title}" from the backlog?`)) return;
+    // DELETE answers 204, which fetchJson reports as null — the same value
+    // guarded returns on failure. Since the two are indistinguishable here,
+    // always resync: guarded has already surfaced any error in a toast, and
+    // reloading is harmless either way.
+    await guarded(
+      fetchJson(`/api/backlog/${item.id}`, { method: 'DELETE' }),
+      'Failed to remove backlog item'
+    );
     await loadBacklog();
   }
 
@@ -509,12 +716,22 @@
     }
     const isSwitch = state.activeDetailId !== sessionId;
     state.activeDetailId = sessionId;
+    markSessionViewed(sessionId);
+    // The unseen badge on this card needs to clear immediately, not wait for
+    // the next poll.
+    for (const child of document.getElementById('session-grid').children) {
+      if (child.dataset && child.dataset.sessionId === sessionId) {
+        const badge = child.querySelector('.card-unseen-badge');
+        if (badge) badge.classList.remove('card-status-label--unseen');
+      }
+    }
     renderDetail(session);
     if (isSwitch) {
       const history = document.getElementById('chat-history');
       if (history) history.innerHTML = '';
       loadChatMessages(sessionId);
       watchSession(sessionId);
+      closeSlashPopup();
     }
     // reflect the active card highlight without a full grid rebuild
     for (const child of document.getElementById('session-grid').children) {
@@ -554,6 +771,146 @@
     renderChatMessages(result.messages);
   }
 
+  // ---------- chat markdown rendering ----------
+  //
+  // Renders a small subset of Markdown as real DOM nodes — never innerHTML,
+  // never a raw-string HTML parse. Message text is user/model-authored and
+  // therefore untrusted; every leaf of text goes through textContent.
+  // Handles: **bold**, *italic*/_italic_, `inline code`, ```fenced code```,
+  // # / ## headers, and -/*/numbered lists. Anything else (the common case —
+  // plain paragraphs with no markdown at all) takes a fast textContent path.
+
+  const MARKDOWN_HINT_RE = /```|`[^`]+`|\*\*[^*]+\*\*|(?:^|\n)#{1,2}\s|(?:^|\n)[-*]\s|(?:^|\n)\d+\.\s|_[^_]+_|\*[^*]+\*/;
+
+  function renderMarkdownInto(container, text) {
+    container.textContent = '';
+    if (!text) return;
+    if (!MARKDOWN_HINT_RE.test(text)) {
+      container.textContent = text;
+      return;
+    }
+    for (const part of splitFencedCode(text)) {
+      if (part.type === 'code') {
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.textContent = part.text;
+        pre.appendChild(code);
+        container.appendChild(pre);
+      } else if (part.text) {
+        renderMarkdownBlock(container, part.text);
+      }
+    }
+  }
+
+  // Pulls out ```fenced code blocks``` first, since their contents must never
+  // be interpreted as markdown themselves (no bold/list parsing inside code).
+  function splitFencedCode(text) {
+    const parts = [];
+    const re = /```[^\n]*\n?([\s\S]*?)```/g;
+    let lastIndex = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      if (m.index > lastIndex) parts.push({ type: 'text', text: text.slice(lastIndex, m.index) });
+      parts.push({ type: 'code', text: m[1].replace(/\n$/, '') });
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) parts.push({ type: 'text', text: text.slice(lastIndex) });
+    return parts;
+  }
+
+  // Line-based block parser for one non-code segment: groups consecutive
+  // list-item lines into <ul>/<ol>, recognizes # / ## headers, and treats
+  // runs of plain lines as a paragraph (joined with <br>, not raw "\n", since
+  // these are now real elements rather than a single pre-wrapped text node).
+  function renderMarkdownBlock(container, text) {
+    const lines = text.split('\n');
+    let i = 0;
+    let paragraphLines = [];
+
+    function flushParagraph() {
+      if (paragraphLines.length === 0) return;
+      const p = document.createElement('p');
+      p.className = 'chat-md-p';
+      paragraphLines.forEach((line, idx) => {
+        if (idx > 0) p.appendChild(document.createElement('br'));
+        appendInlineMarkdown(p, line);
+      });
+      container.appendChild(p);
+      paragraphLines = [];
+    }
+
+    while (i < lines.length) {
+      const line = lines[i];
+      const headerMatch = /^(#{1,2})\s+(.*)$/.exec(line);
+      const ulMatch = /^[-*]\s+(.*)$/.exec(line);
+      const olMatch = /^\d+\.\s+(.*)$/.exec(line);
+
+      if (headerMatch) {
+        flushParagraph();
+        const h = document.createElement(headerMatch[1].length === 1 ? 'h4' : 'h5');
+        h.className = 'chat-md-heading';
+        appendInlineMarkdown(h, headerMatch[2]);
+        container.appendChild(h);
+        i++;
+        continue;
+      }
+
+      if (ulMatch || olMatch) {
+        flushParagraph();
+        const ordered = !!olMatch;
+        const list = document.createElement(ordered ? 'ol' : 'ul');
+        list.className = 'chat-md-list';
+        while (i < lines.length) {
+          const itemMatch = ordered ? /^\d+\.\s+(.*)$/.exec(lines[i]) : /^[-*]\s+(.*)$/.exec(lines[i]);
+          if (!itemMatch) break;
+          const li = document.createElement('li');
+          appendInlineMarkdown(li, itemMatch[1]);
+          list.appendChild(li);
+          i++;
+        }
+        container.appendChild(list);
+        continue;
+      }
+
+      if (line.trim() === '') {
+        flushParagraph();
+        i++;
+        continue;
+      }
+
+      paragraphLines.push(line);
+      i++;
+    }
+    flushParagraph();
+  }
+
+  // Inline spans within one line: `code`, **bold**, *italic*/_italic_. Plain
+  // runs of text become text nodes — no element, no innerHTML, ever.
+  function appendInlineMarkdown(parent, text) {
+    const re = /`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*|_([^_]+)_/g;
+    let lastIndex = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      if (m.index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, m.index)));
+      if (m[1] !== undefined) {
+        const code = document.createElement('code');
+        code.className = 'chat-md-code';
+        code.textContent = m[1];
+        parent.appendChild(code);
+      } else if (m[2] !== undefined) {
+        const strong = document.createElement('strong');
+        strong.textContent = m[2];
+        parent.appendChild(strong);
+      } else {
+        const em = document.createElement('em');
+        em.textContent = m[3] !== undefined ? m[3] : m[4];
+        parent.appendChild(em);
+      }
+      lastIndex = re.lastIndex;
+    }
+    if (lastIndex < text.length) parent.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
+
   function renderChatMessages(messages) {
     const container = document.getElementById('chat-history');
     if (!container) return;
@@ -580,7 +937,7 @@
       }
       const bubble = document.createElement('div');
       bubble.className = `chat-msg chat-msg--${msg.kind === 'tool' ? 'tool' : (isUser ? 'user' : 'assistant')}`;
-      bubble.textContent = msg.text; // user/model text — never innerHTML
+      renderMarkdownInto(bubble, msg.text); // user/model text — never innerHTML
       row.appendChild(bubble);
       container.appendChild(row);
     }
@@ -596,6 +953,7 @@
   function closeDetail() {
     if (state.activeDetailId) unwatchSession(state.activeDetailId);
     state.activeDetailId = null;
+    closeSlashPopup();
     const drawer = document.getElementById('detail-drawer');
     drawer.style.display = 'none';
     // Closing a full-width drawer must give the main column back, or the
@@ -616,6 +974,8 @@
 
   const DRAWER_SIZES = ['normal', 'wide', 'full'];
   const DRAWER_SIZE_KEY = 'djinn.drawerSize';
+  const DRAWER_WIDTH_PX_KEY = 'djinn.drawerWidthPx';
+  const DRAWER_MIN_WIDTH_PX = 320;
 
   function readDrawerSize() {
     try {
@@ -626,12 +986,37 @@
     }
   }
 
+  // A freely-dragged width (see wireDrawerResize) overrides the normal/wide/
+  // full presets via an inline style. Clicking the cycle-size button clears
+  // it and returns to preset behavior.
+  function readDrawerWidthPx() {
+    try {
+      const raw = localStorage.getItem(DRAWER_WIDTH_PX_KEY);
+      const n = raw ? parseInt(raw, 10) : NaN;
+      return Number.isFinite(n) && n > 0 ? n : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveDrawerWidthPx(px) {
+    try { localStorage.setItem(DRAWER_WIDTH_PX_KEY, String(px)); } catch { /* non-fatal */ }
+  }
+
+  function clearDrawerWidthPx() {
+    try { localStorage.removeItem(DRAWER_WIDTH_PX_KEY); } catch { /* non-fatal */ }
+  }
+
   function applyDrawerSize() {
     const drawer = document.getElementById('detail-drawer');
     if (!drawer) return;
     drawer.classList.toggle('drawer--wide', state.drawerSize === 'wide');
     drawer.classList.toggle('drawer--full', state.drawerSize === 'full');
     drawer.classList.toggle('drawer--min', state.drawerMinimized);
+
+    // Inline width wins over the preset classes; clearing it (drawerWidthPx
+    // === null) hands width back to whichever preset class is toggled above.
+    drawer.style.width = state.drawerWidthPx ? `${state.drawerWidthPx}px` : '';
 
     // At full width .main-content still contributes its horizontal padding, so
     // a sliver of it survives beside the drawer. Take it out of flow instead.
@@ -657,6 +1042,9 @@
     state.drawerSize = DRAWER_SIZES[next];
     // Widening a minimized drawer should show you the result, not stay collapsed.
     state.drawerMinimized = false;
+    // The cycle button is the explicit "back to presets" control.
+    state.drawerWidthPx = null;
+    clearDrawerWidthPx();
     try { localStorage.setItem(DRAWER_SIZE_KEY, state.drawerSize); } catch { /* non-fatal */ }
     applyDrawerSize();
   }
@@ -664,6 +1052,175 @@
   function toggleDrawerMinimized() {
     state.drawerMinimized = !state.drawerMinimized;
     applyDrawerSize();
+  }
+
+  // Free-drag resize via the handle on the drawer's left edge. Dragging left
+  // (away from the drawer's own right-anchored edge) grows it; the resulting
+  // pixel width is applied as an inline style and persisted, and wins over
+  // whichever preset class is active until the size button is clicked.
+  function wireDrawerResize() {
+    const handle = document.getElementById('drawer-resize-handle');
+    const drawer = document.getElementById('detail-drawer');
+    if (!handle || !drawer) return;
+
+    let dragging = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    const onMouseMove = (e) => {
+      if (!dragging) return;
+      const deltaX = startX - e.clientX;
+      const max = Math.floor(window.innerWidth * 0.95);
+      const newWidth = Math.max(DRAWER_MIN_WIDTH_PX, Math.min(max, startWidth + deltaX));
+      state.drawerWidthPx = newWidth;
+      drawer.style.width = `${newWidth}px`;
+    };
+    const onMouseUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.style.userSelect = '';
+      if (state.drawerWidthPx) saveDrawerWidthPx(state.drawerWidthPx);
+    };
+
+    handle.addEventListener('mousedown', (e) => {
+      if (state.drawerMinimized || state.drawerSize === 'full') return;
+      dragging = true;
+      startX = e.clientX;
+      startWidth = drawer.getBoundingClientRect().width;
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }
+
+  // ---------- model / permission-mode selectors ----------
+  //
+  // One shared preference each, persisted per browser and mirrored across
+  // both places it's offered (the drawer footer for follow-ups, the command
+  // bar for new sessions) so picking a model in one doesn't reset when you
+  // open the other. Empty string means "default" and is omitted from the
+  // request body entirely, matching what the two send paths already do for
+  // other optional fields.
+  const MODEL_PREF_KEY = 'djinn.model';
+  const PERMISSION_PREF_KEY = 'djinn.permissionMode';
+  const PERMISSION_MODES = ['plan', 'acceptEdits', 'bypassPermissions', 'manual'];
+
+  function readModelPref() {
+    try {
+      return localStorage.getItem(MODEL_PREF_KEY) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function saveModelPref(value) {
+    try { localStorage.setItem(MODEL_PREF_KEY, value || ''); } catch { /* non-fatal */ }
+  }
+
+  function readPermissionPref() {
+    try {
+      const saved = localStorage.getItem(PERMISSION_PREF_KEY) || '';
+      return PERMISSION_MODES.includes(saved) ? saved : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function savePermissionPref(value) {
+    try { localStorage.setItem(PERMISSION_PREF_KEY, value || ''); } catch { /* non-fatal */ }
+  }
+
+  const MODEL_SELECT_IDS = ['command-model-select', 'detail-model-select'];
+  const PERMISSION_SELECT_IDS = ['command-permission-select', 'detail-permission-select'];
+
+  function applyControlPrefsToSelects() {
+    const model = readModelPref();
+    const permission = readPermissionPref();
+    for (const id of MODEL_SELECT_IDS) {
+      const el = document.getElementById(id);
+      if (el) el.value = model;
+    }
+    for (const id of PERMISSION_SELECT_IDS) {
+      const el = document.getElementById(id);
+      if (el) {
+        el.value = permission;
+        el.classList.toggle('control-select--armed', !!permission);
+      }
+    }
+  }
+
+  function wireControlSelects() {
+    for (const id of MODEL_SELECT_IDS) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.addEventListener('change', () => {
+        saveModelPref(el.value);
+        applyControlPrefsToSelects();
+      });
+    }
+    for (const id of PERMISSION_SELECT_IDS) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.addEventListener('change', () => {
+        savePermissionPref(el.value);
+        applyControlPrefsToSelects();
+      });
+    }
+  }
+
+  // "Default" left people guessing what it actually resolves to, so once we
+  // know the user's real configured default (read server-side from their own
+  // ~/.claude/settings.json — see claudeUserConfig.js), the option text grows
+  // a bracket: "Default (Sonnet)". Best-effort only: if nothing is configured
+  // or the fetch fails, the option stays plain "Default".
+  const MODEL_DEFAULT_LABELS = {
+    opus: 'Opus',
+    sonnet: 'Sonnet',
+    haiku: 'Haiku',
+    fable: 'Fable',
+    'claude-opus-4-8': 'Opus',
+    'claude-sonnet-5': 'Sonnet',
+    'claude-haiku-4-5-20251001': 'Haiku',
+    'claude-fable-5': 'Fable',
+  };
+  const PERMISSION_DEFAULT_LABELS = {
+    plan: 'Plan',
+    acceptEdits: 'Accept Edits',
+    bypassPermissions: 'Bypass Permissions',
+    manual: 'Manual',
+    auto: 'Auto',
+    dontAsk: "Don't Ask",
+    default: 'asks before risky actions',
+  };
+
+  function labelDefaultOption(selectId, text) {
+    const el = document.getElementById(selectId);
+    const opt = el && el.querySelector('option[value=""]');
+    if (opt) opt.textContent = text;
+  }
+
+  async function loadClaudeDefaultsLabel() {
+    const result = await fetchJson('/api/claude-defaults').catch(() => null);
+    if (!result) return;
+    if (result.model) {
+      const label = MODEL_DEFAULT_LABELS[result.model] || result.model;
+      for (const id of MODEL_SELECT_IDS) labelDefaultOption(id, `Default (${label})`);
+    }
+    if (result.permissionMode) {
+      const label = PERMISSION_DEFAULT_LABELS[result.permissionMode] || result.permissionMode;
+      for (const id of PERMISSION_SELECT_IDS) labelDefaultOption(id, `Default (${label})`);
+    }
+  }
+
+  // Merged into a POST body — only non-empty ("default") values are included.
+  function currentModelAndPermissionFields() {
+    const fields = {};
+    const model = readModelPref();
+    const permissionMode = readPermissionPref();
+    if (model) fields.model = model;
+    if (permissionMode) fields.permissionMode = permissionMode;
+    return fields;
   }
 
   async function sendDetailMessage(message) {
@@ -682,7 +1239,7 @@
       await fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, ...currentModelAndPermissionFields() }),
       });
       await loadSessions();
       if (state.activeDetailId === sessionId) await loadChatMessages(sessionId);
@@ -693,6 +1250,171 @@
     } finally {
       if (workingEl) workingEl.hidden = true;
     }
+  }
+
+  // ---------- slash-command autocomplete ----------
+  //
+  // Detail composer only — it needs the open session's project path, which
+  // only the drawer's "open session" concept has (the new-session command
+  // bar has a chosen directory, not a session). Commands are cached per
+  // project path so retyping "/" doesn't refetch on every keystroke; a
+  // fetch failure is treated as "no commands available", not fatal.
+
+  const SLASH_TRIGGER_RE = /(?:^|\s)\/(\S*)$/;
+  const commandsCache = new Map(); // normalized project path -> Promise<Array<{name, description, source}>>
+
+  function fetchCommandsForPath(projectPath) {
+    const key = normalizeClientPath(projectPath);
+    if (commandsCache.has(key)) return commandsCache.get(key);
+    const promise = fetchJson(`/api/commands?path=${encodeURIComponent(projectPath)}`)
+      .then((r) => (r && Array.isArray(r.commands) ? r.commands : []))
+      .catch(() => []);
+    commandsCache.set(key, promise);
+    return promise;
+  }
+
+  const slashState = {
+    open: false,
+    items: [],
+    activeIndex: 0,
+    matchStart: -1, // index into the input value where the "/" itself starts
+  };
+
+  function closeSlashPopup() {
+    slashState.open = false;
+    slashState.items = [];
+    const popup = document.getElementById('slash-popup');
+    if (popup) {
+      popup.hidden = true;
+      popup.textContent = '';
+    }
+  }
+
+  function renderSlashPopup() {
+    const popup = document.getElementById('slash-popup');
+    if (!popup) return;
+    popup.textContent = '';
+    if (slashState.items.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'slash-popup-empty';
+      empty.textContent = 'No matching commands';
+      popup.appendChild(empty);
+      popup.hidden = false;
+      return;
+    }
+    slashState.items.forEach((cmd, idx) => {
+      const row = document.createElement('div');
+      row.className = `slash-popup-item${idx === slashState.activeIndex ? ' slash-popup-item--active' : ''}`;
+      const name = document.createElement('div');
+      name.className = 'slash-popup-item-name';
+      name.textContent = cmd.name; // untrusted (project-authored) — textContent only
+      row.appendChild(name);
+      if (cmd.description) {
+        const desc = document.createElement('div');
+        desc.className = 'slash-popup-item-desc';
+        desc.textContent = cmd.description; // untrusted — textContent only
+        row.appendChild(desc);
+      }
+      // mousedown (not click) fires before the input would blur the popup away.
+      row.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        applySlashSelection(idx);
+      });
+      popup.appendChild(row);
+    });
+    popup.hidden = false;
+  }
+
+  function applySlashSelection(idx) {
+    const cmd = slashState.items[idx];
+    const input = document.getElementById('detail-send-input');
+    if (!cmd || !input) return;
+    const value = input.value;
+    const cursor = input.selectionStart != null ? input.selectionStart : value.length;
+    const before = value.slice(0, slashState.matchStart);
+    const after = value.slice(cursor);
+    const inserted = `/${cmd.name} `;
+    input.value = before + inserted + after;
+    const newCursor = (before + inserted).length;
+    input.setSelectionRange(newCursor, newCursor);
+    input.focus();
+    closeSlashPopup();
+  }
+
+  function moveSlashActive(delta) {
+    if (slashState.items.length === 0) return;
+    slashState.activeIndex = (slashState.activeIndex + delta + slashState.items.length) % slashState.items.length;
+    renderSlashPopup();
+  }
+
+  async function handleDetailInputForSlash() {
+    const input = document.getElementById('detail-send-input');
+    if (!input || !state.activeDetailId) {
+      closeSlashPopup();
+      return;
+    }
+    const cursor = input.selectionStart != null ? input.selectionStart : input.value.length;
+    const match = SLASH_TRIGGER_RE.exec(input.value.slice(0, cursor));
+    if (!match) {
+      closeSlashPopup();
+      return;
+    }
+    slashState.open = true;
+    slashState.matchStart = match.index + (match[0].length - match[1].length - 1);
+
+    const session = state.sessions.find((s) => s.id === state.activeDetailId);
+    const projectPath = session && session.projectPath;
+    if (!projectPath) {
+      closeSlashPopup();
+      return;
+    }
+
+    const sessionAtFetch = state.activeDetailId;
+    const commands = await fetchCommandsForPath(projectPath);
+    // The user may have kept typing, moved the caret off the slash token, or
+    // switched sessions entirely while this was in flight — re-check both.
+    if (state.activeDetailId !== sessionAtFetch) return;
+    const currentCursor = input.selectionStart != null ? input.selectionStart : input.value.length;
+    const currentMatch = SLASH_TRIGGER_RE.exec(input.value.slice(0, currentCursor));
+    if (!currentMatch) {
+      closeSlashPopup();
+      return;
+    }
+
+    const q = currentMatch[1].toLowerCase();
+    const filtered = commands
+      .filter((c) => c.name.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aStarts = a.name.toLowerCase().startsWith(q) ? 0 : 1;
+        const bStarts = b.name.toLowerCase().startsWith(q) ? 0 : 1;
+        return aStarts !== bStarts ? aStarts - bStarts : a.name.localeCompare(b.name);
+      });
+    slashState.items = filtered.slice(0, 20);
+    slashState.activeIndex = 0;
+    renderSlashPopup();
+  }
+
+  // ---------- add-file button (detail composer only) ----------
+
+  function insertTextAtCursor(input, text) {
+    const start = input.selectionStart != null ? input.selectionStart : input.value.length;
+    const end = input.selectionEnd != null ? input.selectionEnd : input.value.length;
+    const value = input.value;
+    input.value = value.slice(0, start) + text + value.slice(end);
+    const cursor = start + text.length;
+    input.setSelectionRange(cursor, cursor);
+    input.focus();
+  }
+
+  async function browseForFile() {
+    const result = await guarded(
+      fetchJson('/api/directories/browse-file', { method: 'POST' }),
+      'Failed to open the file picker'
+    );
+    if (result === null) return;
+    if (!result.path) return; // user cancelled the native dialog
+    const input = document.getElementById('detail-send-input');
+    if (input) insertTextAtCursor(input, `@${result.path} `);
   }
 
   // ---------- new-session directory picker + command bar ----------
@@ -822,11 +1544,12 @@
       return;
     }
     showToast(`${assistantName()} is on it…`, false);
+    const priorIds = new Set(state.sessions.map((s) => s.id));
     const result = await guarded(
       fetchJson('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd, message }),
+        body: JSON.stringify({ cwd, message, ...currentModelAndPermissionFields() }),
       }),
       'Failed to start session'
     );
@@ -834,6 +1557,8 @@
     input.value = '';
     showToast(`${assistantName()} finished the run — session added.`, false);
     await Promise.all([loadSessions(), loadProjects(), loadRecentDirectories()]);
+    // This browser just created that session — it shouldn't show as unseen.
+    markSessionsSeenSince(priorIds);
   }
 
   // ---------- WebSocket ----------
@@ -878,10 +1603,36 @@
 
   // ---------- memory ----------
 
+  // Supplements (does not replace) the existing toast: a small inline label
+  // next to each save button that tracks the textarea's dirty state across
+  // load/edit/save, so "did my last edit actually save?" doesn't require
+  // remembering whether a toast flashed by a moment ago.
+  function setMemoryStatus(elId, text, cls) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove('memory-status--unsaved', 'memory-status--saved');
+    if (cls) el.classList.add(cls);
+  }
+
+  function wireMemoryStatus() {
+    const commonTextarea = document.getElementById('memory-common-text');
+    if (commonTextarea) {
+      commonTextarea.addEventListener('input', () =>
+        setMemoryStatus('memory-common-status', 'Unsaved changes', 'memory-status--unsaved'));
+    }
+    const projectTextarea = document.getElementById('memory-project-text');
+    if (projectTextarea) {
+      projectTextarea.addEventListener('input', () =>
+        setMemoryStatus('memory-project-status', 'Unsaved changes', 'memory-status--unsaved'));
+    }
+  }
+
   async function loadMemoryCommon() {
     const result = await guarded(fetchJson('/api/memory/common'), 'Failed to load common memory');
     if (result === null) return;
     document.getElementById('memory-common-text').value = result.text || '';
+    setMemoryStatus('memory-common-status', '', null);
   }
 
   async function saveMemoryCommon() {
@@ -894,13 +1645,17 @@
       }),
       'Failed to save common memory'
     );
-    if (result !== null) showToast('Common memory saved.', false);
+    if (result !== null) {
+      showToast('Common memory saved.', false);
+      setMemoryStatus('memory-common-status', `Saved at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`, 'memory-status--saved');
+    }
   }
 
   async function loadMemoryProject(projectPath) {
     const textarea = document.getElementById('memory-project-text');
     if (!projectPath) {
       textarea.value = '';
+      setMemoryStatus('memory-project-status', '', null);
       return;
     }
     const result = await guarded(
@@ -909,6 +1664,7 @@
     );
     if (result === null) return;
     textarea.value = result.text || '';
+    setMemoryStatus('memory-project-status', '', null);
   }
 
   async function saveMemoryProject() {
@@ -926,7 +1682,10 @@
       }),
       'Failed to save project memory'
     );
-    if (result !== null) showToast('Project memory saved.', false);
+    if (result !== null) {
+      showToast('Project memory saved.', false);
+      setMemoryStatus('memory-project-status', `Saved at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`, 'memory-status--saved');
+    }
   }
 
   function populateMemoryProjectSelect() {
@@ -1007,10 +1766,12 @@
       subEl.textContent = `${runningCount} agent${runningCount === 1 ? '' : 's'} active across ${repoCount} repo${repoCount === 1 ? '' : 's'}`;
     }
 
-    // The header orb is the global activity indicator: it breathes when idle
-    // and pulses while anything runs.
-    const orb = document.getElementById('header-orb');
-    if (orb) orb.classList.toggle('orb--active', runningCount > 0);
+    // The header and hero orbs are the global activity indicators: they
+    // breathe when idle and pulse faster while anything runs.
+    for (const orbId of ['header-orb', 'hero-orb']) {
+      const orb = document.getElementById(orbId);
+      if (orb) orb.classList.toggle('orb--active', runningCount > 0);
+    }
 
     // Quiet hint on the Projects button when discovered projects are hidden.
     const hintEl = document.getElementById('untracked-hint');
@@ -1055,209 +1816,13 @@
     document.getElementById('all-sessions-row').classList.remove('row--active');
   }
 
-  // ---------- the living orb (3D particle cloud) ----------
+  // ---------- the living orb ----------
   //
-  // Each .orb container (except the tiny .orb--dot beads) gets a canvas with
-  // a true-3D particle sphere: points spread over a sphere with a fibonacci
-  // lattice, rotated around a tilted axis and perspective-projected every
-  // frame. Depth drives size and opacity, so the cloud visibly turns in 3D.
-  // `.orb--active` (any session running) speeds the spin and brightens the
-  // cloud; `.orb--burst` (naming celebration) fires a one-shot expansion.
-
-  const orbRenderers = [];
-  let orbPalette = null;
-
-  function hexToRgb(hex) {
-    const h = hex.replace('#', '');
-    const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
-    const n = parseInt(full, 16);
-    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-  }
-
-  function getOrbPalette() {
-    if (orbPalette) return orbPalette;
-    const accentValue = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#d97757';
-    const accent = accentValue.startsWith('#') ? hexToRgb(accentValue) : { r: 217, g: 119, b: 87 };
-    // near-white warm tint for the front-most particles
-    const bright = {
-      r: Math.round(accent.r + (255 - accent.r) * 0.65),
-      g: Math.round(accent.g + (255 - accent.g) * 0.6),
-      b: Math.round(accent.b + (255 - accent.b) * 0.55),
-    };
-    orbPalette = { accent, bright };
-    return orbPalette;
-  }
-
-  function rgba(c, a) {
-    return `rgba(${c.r},${c.g},${c.b},${a})`;
-  }
-
-  function makeOrbRenderer(container) {
-    const canvas = document.createElement('canvas');
-    container.appendChild(canvas);
-    const particles = [];
-    const count = 230;
-    const golden = Math.PI * (3 - Math.sqrt(5));
-    for (let i = 0; i < count; i += 1) {
-      const y = 1 - (i / (count - 1)) * 2;
-      const rad = Math.sqrt(Math.max(0, 1 - y * y));
-      const theta = golden * i;
-      particles.push({
-        x: Math.cos(theta) * rad,
-        y,
-        z: Math.sin(theta) * rad,
-        twinkleSpeed: 0.6 + Math.random() * 2.2,
-        twinklePhase: Math.random() * Math.PI * 2,
-        sizeJitter: 0.55 + Math.random() * 1.0,
-      });
-    }
-    return {
-      container,
-      canvas,
-      ctx: canvas.getContext('2d'),
-      particles,
-      angle: Math.random() * Math.PI * 2,
-      speed: 0.18,
-      pixelSize: 0,
-      burstStartedAt: 0,
-    };
-  }
-
-  function drawOrb(o, dt, now, animate) {
-    const el = o.container;
-    if (el.offsetWidth === 0) return; // hidden (e.g. onboarding step not shown)
-
-    const dpr = window.devicePixelRatio || 1;
-    const pixelSize = Math.round(el.offsetWidth * 1.5 * dpr);
-    if (pixelSize <= 0) return;
-    if (o.pixelSize !== pixelSize) {
-      o.pixelSize = pixelSize;
-      o.canvas.width = pixelSize;
-      o.canvas.height = pixelSize;
-    }
-
-    const active = el.classList.contains('orb--active');
-    if (el.classList.contains('orb--burst') && !o.burstStartedAt) {
-      o.burstStartedAt = now;
-      setTimeout(() => {
-        el.classList.remove('orb--burst');
-        o.burstStartedAt = 0;
-      }, 1000);
-    }
-
-    // ease the spin speed toward its target so state changes feel organic
-    const targetSpeed = active ? 1.1 : 0.18;
-    o.speed += (targetSpeed - o.speed) * Math.min(1, dt * 2.5);
-    o.angle += o.speed * dt;
-
-    let burstScale = 1;
-    if (o.burstStartedAt) {
-      const t = (now - o.burstStartedAt) / 1000;
-      burstScale = 1 + 0.45 * Math.exp(-t * 3.5) * Math.sin(Math.min(t * 9, Math.PI));
-    }
-
-    const { accent, bright } = getOrbPalette();
-    const ctx = o.ctx;
-    const size = pixelSize;
-    const center = size / 2;
-    const radius = size * 0.31 * burstScale;
-
-    ctx.clearRect(0, 0, size, size);
-
-    // soft core glow behind the cloud
-    const glow = ctx.createRadialGradient(center, center, 0, center, center, radius * 1.2);
-    glow.addColorStop(0, rgba(accent, active ? 0.30 : 0.16));
-    glow.addColorStop(1, rgba(accent, 0));
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, size, size);
-
-    const sinA = Math.sin(o.angle);
-    const cosA = Math.cos(o.angle);
-    const tilt = 0.42; // fixed axis tilt so the spin reads as 3D
-    const sinT = Math.sin(tilt);
-    const cosT = Math.cos(tilt);
-    const seconds = now / 1000;
-    const dotScale = size / 190;
-
-    for (const p of o.particles) {
-      // rotate around the vertical axis…
-      const x = p.x * cosA + p.z * sinA;
-      const z = -p.x * sinA + p.z * cosA;
-      // …then tilt the whole sphere forward
-      const y2 = p.y * cosT - z * sinT;
-      const z2 = p.y * sinT + z * cosT;
-
-      const persp = 1 / (1.65 - z2 * 0.5);
-      const px = center + x * radius * persp;
-      const py = center + y2 * radius * persp;
-      const depth = (z2 + 1) / 2; // 0 = back, 1 = front
-
-      let alpha = 0.10 + 0.8 * depth * depth;
-      if (animate) alpha *= 0.72 + 0.28 * Math.sin(seconds * p.twinkleSpeed + p.twinklePhase);
-      if (active) alpha = Math.min(1, alpha * 1.3);
-
-      const dotRadius = Math.max(0.4, (0.5 + 1.15 * depth) * p.sizeJitter * dotScale);
-      ctx.beginPath();
-      ctx.arc(px, py, dotRadius, 0, Math.PI * 2);
-      ctx.fillStyle = depth > 0.86 ? rgba(bright, alpha) : rgba(accent, alpha);
-      ctx.fill();
-    }
-  }
-
-  let orbLastFrameAt = 0;
-  let orbReducedMotion = false;
-
-  function orbTick(now) {
-    const dt = orbLastFrameAt ? Math.min(0.05, (now - orbLastFrameAt) / 1000) : 0.016;
-    orbLastFrameAt = performance.now();
-    for (const o of orbRenderers) {
-      // Reduced motion: each orb gets one static frame the first time it's
-      // visible (pixelSize is only set once it has been drawn), then holds.
-      if (orbReducedMotion && o.pixelSize !== 0) continue;
-      drawOrb(o, dt, now, !orbReducedMotion);
-    }
-  }
-
-  function orbFrame(now) {
-    // Perf guard: a hero orb is ~2600 sprite blits a frame, which is not worth
-    // spending on a background tab. (Most browsers already throttle rAF when
-    // hidden, but embedded webviews don't reliably, and the watchdog below
-    // would otherwise happily keep ticking at full cost.)
-    if (!document.hidden) orbTick(now);
-    requestAnimationFrame(orbFrame);
-  }
-
-  function initOrbs() {
-    for (const el of document.querySelectorAll('.orb')) {
-      if (el.classList.contains('orb--dot')) continue;
-      orbRenderers.push(makeOrbRenderer(el));
-    }
-    // theme flips change --accent; drop the cached palette *and* the sprites
-    // baked from it so the next frame picks up the new colors
-    new MutationObserver(() => { orbPalette = null; })
-      .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-
-    // Coming back from a hidden tab, `now` has jumped; reset the clock so the
-    // first visible frame doesn't integrate a huge dt into the spin.
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) orbLastFrameAt = performance.now();
-    });
-
-    orbReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    requestAnimationFrame(orbFrame);
-    // Some embedded webviews render the page while reporting it hidden, which
-    // suppresses requestAnimationFrame entirely. If frames stall, keep the
-    // orb alive at a low rate; when rAF is healthy this never fires.
-    //
-    // Note this deliberately does NOT check document.hidden: those webviews
-    // are exactly the case where document.hidden lies, so honouring it here
-    // would freeze the orb for them permanently. 10fps is the floor we pay.
-    setInterval(() => {
-      if (performance.now() - orbLastFrameAt > 400) orbTick(performance.now());
-    }, 100);
-
-    initHeroOrb();
-  }
+  // The orb itself is pure CSS (layered radial gradients, a drifting conic
+  // rim highlight, breathe/burst keyframes in styles.css) — no canvas, no
+  // per-frame JS. `.orb--active` (any session running) speeds it up and
+  // brightens it; `.orb--burst` (naming celebration) fires a one-shot pop.
+  // The only scripted part is the hero orb's scroll collapse below.
 
   // The hero orb is a nice first impression and dead weight thereafter, so it
   // folds away once you start reading the list below it.
@@ -1559,6 +2124,7 @@
     document.getElementById('memory-common-save').addEventListener('click', saveMemoryCommon);
     document.getElementById('memory-project-save').addEventListener('click', saveMemoryProject);
     document.getElementById('memory-project-select').addEventListener('change', (e) => loadMemoryProject(e.target.value));
+    wireMemoryStatus();
 
     document.getElementById('all-sessions-row').addEventListener('click', showSessionsView);
     document.getElementById('memory-row').addEventListener('click', showMemoryView);
@@ -1602,17 +2168,45 @@
     document.querySelector('#detail-drawer .drawer-header').addEventListener('click', (e) => {
       if (state.drawerMinimized && !e.target.closest('.drawer-controls')) toggleDrawerMinimized();
     });
+    wireDrawerResize();
+
     const detailInput = document.querySelector('#detail-drawer .detail-send-input');
     const detailSendBtn = document.querySelector('#detail-drawer .detail-send-btn');
     detailSendBtn.addEventListener('click', () => {
       sendDetailMessage(detailInput.value);
       detailInput.value = '';
+      closeSlashPopup();
     });
     detailInput.addEventListener('keydown', (e) => {
+      if (slashState.open) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveSlashActive(1); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); moveSlashActive(-1); return; }
+        if ((e.key === 'Enter' || e.key === 'Tab') && slashState.items.length > 0) {
+          e.preventDefault();
+          applySlashSelection(slashState.activeIndex);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeSlashPopup();
+          return;
+        }
+      }
       if (e.key === 'Enter') detailSendBtn.click();
     });
+    detailInput.addEventListener('input', handleDetailInputForSlash);
+    detailInput.addEventListener('click', handleDetailInputForSlash);
+    detailInput.addEventListener('blur', () => closeSlashPopup());
 
-    initOrbs();
+    document.getElementById('detail-attach-btn').addEventListener('click', browseForFile);
+
+    // Model / permission-mode selectors: same preference mirrored in both the
+    // command bar and the drawer footer.
+    applyControlPrefsToSelects();
+    wireControlSelects();
+    loadClaudeDefaultsLabel();
+
+    initHeroOrb();
 
     // Settings must load first so the tracked-projects filter and the
     // assistant's name are in place before anything renders.

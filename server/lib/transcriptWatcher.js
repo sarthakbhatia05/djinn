@@ -65,6 +65,19 @@ function createTranscriptWatcher({ getTranscriptPath, watchFn = fs.watch, thrott
           return; // file vanished between resolve and watch — nothing to track
         }
         watches.set(msg.sessionId, { watcher, timer: null, pending: false });
+        // The try/catch above only covers the synchronous watchFn call. An
+        // FSWatcher also reports failures asynchronously via 'error' — on
+        // Windows, EPERM when the watched file is renamed or deleted, which
+        // Claude Code does when it rotates transcripts. With no listener that
+        // event throws and, since nothing installs an uncaughtException
+        // handler, kills the server. Drop the dead watch and keep serving; the
+        // client still has its 10s poll to fall back on.
+        if (typeof watcher.on === 'function') {
+          watcher.on('error', (err) => {
+            console.error(`transcript watch failed for ${msg.sessionId}:`, err && err.message);
+            stopWatch(msg.sessionId);
+          });
+        }
       } else if (msg.type === 'unwatch' && typeof msg.sessionId === 'string') {
         stopWatch(msg.sessionId);
       }

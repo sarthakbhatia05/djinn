@@ -542,6 +542,21 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .session-filter-reset {
   width: 100%;
   margin-top: 6px;
+  padding: 7px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  /* Sits on the --surface-2 menu, so use --surface (not --surface-2) to stand
+     apart from it; hover shifts border/color only, never the background. */
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  transition: border-color .15s ease, color .15s ease;
+}
+.session-filter-reset:hover {
+  opacity: 1;
+  border-color: var(--text-faint);
+  color: var(--text);
 }
 
 .session-more-row {
@@ -549,6 +564,33 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   justify-content: center;
   margin-top: 12px;
 }
+/* Secondary session controls (project filter, sort order, load-more). Without a
+   rule these fall back to raw user-agent chrome (grey rgb(240,240,240), default
+   border) — jarringly out of place. Style them as secondary controls sitting on
+   the page surface, matching .dir-chip / .running-count. The filter-reset button
+   is excluded here: it lives inside the --surface-2 dropdown and is styled below. */
+.session-filter-btn,
+.session-sort-btn,
+.session-more-btn {
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  transition: border-color .15s ease, color .15s ease, background .15s ease;
+}
+.session-filter-btn:hover,
+.session-sort-btn:hover,
+.session-more-btn:hover {
+  opacity: 1;
+  border-color: var(--text-faint);
+  color: var(--text);
+  background: var(--surface-2);
+}
+.session-filter-btn,
+.session-sort-btn { padding: 6px 12px; }
+.session-more-btn { padding: 8px 18px; }
 .session-more-row,
 .session-grid {
   margin-bottom: 30px;
@@ -586,6 +628,23 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .card-time {
   font-size: 11px;
   color: var(--text-faint);
+}
+/* Unseen-activity badge: a small dot next to the running/idle status dot.
+   Distinct from card-status-label--needs-input (unused — no reliable signal
+   for that yet), this one has a real data source: lastActivity vs a
+   per-browser lastViewedAt stamped in localStorage on openDetail(). */
+.card-unseen-badge {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.card-unseen-badge.card-status-label--unseen {
+  opacity: 1;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-soft);
 }
 .card-title {
   font-size: 14px;
@@ -697,9 +756,35 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   border: 1px solid var(--border);
   color: var(--text-muted);
   flex-shrink: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.backlog-assign-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.backlog-assign-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.backlog-delete-btn {
+  font-size: 15px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.backlog-delete-btn:hover {
+  color: var(--warn);
+  border-color: var(--border);
 }
 
 .drawer {
+  position: relative;
   width: 360px;
   flex-shrink: 0;
   border-left: 1px solid var(--border);
@@ -707,6 +792,23 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Free-drag resize handle on the drawer's left edge. Only meaningful at
+   normal/wide width — at full width there's nothing to drag against, and a
+   minimized drawer has no body to resize. */
+.drawer-resize-handle {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 7px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 6;
+}
+.drawer--full .drawer-resize-handle,
+.drawer--min .drawer-resize-handle {
+  display: none;
 }
 .drawer-header {
   padding: 15px 17px;
@@ -852,10 +954,101 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   white-space: pre-wrap;
 }
 .drawer-footer {
+  position: relative;
   padding: 13px 15px;
   border-top: 1px solid var(--border-soft);
   display: flex;
+  flex-direction: column;
   gap: 8px;
+}
+.drawer-footer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.drawer-footer-send-row {
+  display: flex;
+  gap: 8px;
+}
+.detail-attach-btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+
+/* ---------- Model / permission-mode selectors ----------
+   Shared by the command bar (new session) and the drawer footer (follow-up
+   message), both persisted to localStorage so the choice survives reopening
+   a session. bypassPermissions is meaningfully more dangerous than the other
+   modes, so an armed non-default permission gets an accent/warn treatment
+   the user can't miss at a glance. */
+.control-select {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+  max-width: 140px;
+  flex-shrink: 0;
+}
+.control-select:hover { border-color: var(--text-faint); color: var(--text); }
+.control-select--armed {
+  border-color: var(--warn);
+  color: var(--warn);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+/* ---------- Slash-command autocomplete ---------- */
+.slash-popup {
+  position: absolute;
+  left: 15px;
+  right: 15px;
+  bottom: 100%;
+  margin-bottom: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.4);
+  z-index: 20;
+}
+.slash-popup[hidden] { display: none; }
+.slash-popup-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.slash-popup-item--active,
+.slash-popup-item:hover {
+  background: var(--accent-soft);
+}
+.slash-popup-item-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text);
+}
+.slash-popup-item-name::before {
+  content: '/';
+  color: var(--text-faint);
+}
+.slash-popup-item-desc {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slash-popup-empty {
+  padding: 10px 12px;
+  font-size: 11.5px;
+  color: var(--text-faint);
 }
 .detail-send-input {
   flex: 1;
@@ -889,6 +1082,22 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .memory-panel {
   max-width: 720px;
 }
+.memory-scope-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin: -6px 0 18px;
+}
+.memory-save-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.memory-status {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.memory-status--unsaved { color: var(--warn); }
+.memory-status--saved { color: var(--ok); }
 .memory-section {
   margin-bottom: 26px;
   padding: 18px 20px;
@@ -941,24 +1150,67 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   cursor: pointer;
 }
 
-/* ---------- The living orb (3D particle cloud, canvas-driven) ----------
-   The animation itself lives in app.js: a rotating, perspective-projected
-   particle sphere drawn on a canvas inside each .orb container. These rules
-   only size the containers. */
+/* ---------- The living orb (CSS-only: layered gradients + swirl) ---------- */
+
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); filter: brightness(1) saturate(1); }
+  50% { transform: scale(1.06); filter: brightness(1.18) saturate(1.15); }
+}
+@keyframes orb-swirl {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes orb-burst {
+  0% { transform: scale(1); filter: brightness(1); }
+  35% { transform: scale(1.35); filter: brightness(1.9) saturate(1.4); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
 
 .orb {
   position: relative;
   border-radius: 50%;
   flex-shrink: 0;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 214, 170, 0.95) 0%, rgba(255, 214, 170, 0) 52%),
+    radial-gradient(circle at 70% 68%, rgba(140, 52, 28, 0.9) 0%, rgba(140, 52, 28, 0) 60%),
+    radial-gradient(circle at 50% 50%, var(--accent) 35%, #5d2413 100%);
+  box-shadow:
+    0 0 18px rgba(217, 119, 87, 0.45),
+    inset 0 0 10px rgba(255, 255, 255, 0.22);
+  animation: orb-breathe 4.6s ease-in-out infinite;
 }
-/* Canvas oversizes its container so the glow and edge particles aren't clipped */
-.orb > canvas {
+/* drifting rim highlight — the part that makes it feel alive */
+.orb::before {
+  content: '';
   position: absolute;
-  left: -25%;
-  top: -25%;
-  width: 150%;
-  height: 150%;
+  inset: -12%;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 0deg,
+    rgba(255, 205, 160, 0) 0%,
+    rgba(255, 205, 160, 0.55) 18%,
+    rgba(255, 255, 255, 0) 42%,
+    rgba(255, 205, 160, 0) 100%
+  );
+  filter: blur(5px);
+  animation: orb-swirl 8s linear infinite;
   pointer-events: none;
+}
+
+/* Faster, brighter when any session runs */
+.orb--active {
+  animation-duration: 1.6s;
+  box-shadow:
+    0 0 26px rgba(217, 119, 87, 0.75),
+    inset 0 0 12px rgba(255, 255, 255, 0.3);
+}
+.orb--active::before { animation-duration: 2.6s; }
+
+/* One-shot celebration when the assistant is named */
+.orb--burst { animation: orb-burst 0.9s ease-out 1, orb-breathe 4.6s ease-in-out 0.9s infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .orb, .orb::before { animation: none !important; }
 }
 
 .orb--header { width: 26px; height: 26px; }
@@ -985,18 +1237,26 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 
 /* Hero orb above the command bar. It costs a chunk of the fold, so app.js
    collapses it once .main-content scrolls past ~80px. */
+/* The padding is load-bearing: overflow:hidden (needed for the collapse) clips
+   to this box, and without room the orb's glow, breathe scale-up and contact
+   shadow all get sliced off at the edges. Bottom needs the most — the ::after
+   pool starts at top:100% and runs another 34% of the orb's height. */
 .hero-orb-wrap {
   display: flex;
   justify-content: center;
-  max-height: 190px;
+  max-height: 240px;
   opacity: 1;
   overflow: hidden;
-  margin-bottom: 14px;
+  padding: 34px 0 46px;
+  /* Negative margins cancel that padding so the surrounding layout keeps the
+     original 14px gap — the padding buys drawing room, not spacing. */
+  margin: -34px 0 -18px;
 }
 .hero-orb-wrap.is-collapsed {
   max-height: 0;
   opacity: 0;
-  margin-bottom: 0;
+  padding: 0;
+  margin: 0;
 }
 /* Collapse is deliberately instant. Transitioning max-height/opacity here was
    observed sticking at currentTime 0 in an embedded webview, which pins the
@@ -1005,14 +1265,13 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
    that silently deletes the headline element; the space reclaim still works.
    Restore the transition here if you only ever run this in a real browser. */
 
-/* Chat avatars and the working indicator stay as simple beads — a canvas
-   per message would be wasteful at 12px. */
+/* Chat avatars and the working indicator: same material, no swirl at 12px */
 .orb--dot {
   width: 12px;
   height: 12px;
-  background: radial-gradient(circle at 35% 30%, #ffd6aa, var(--accent) 55%, #9e4a2c 100%);
-  box-shadow: 0 0 6px rgba(217, 119, 87, 0.55);
+  box-shadow: 0 0 8px rgba(217, 119, 87, 0.5);
 }
+.orb--dot::before { display: none; }
 
 /* ---------- Header additions ---------- */
 
@@ -1282,6 +1541,53 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   color: var(--text-faint);
   font-size: 12.5px;
   text-align: center;
+}
+
+/* ---------- Chat markdown rendering ----------
+   Built via renderMarkdownInto() as real DOM nodes (never innerHTML of
+   message text — see app.js). These rules just make the resulting elements
+   sit naturally inside the existing .chat-msg bubble. */
+.chat-md-p {
+  margin: 0 0 8px;
+}
+.chat-md-p:last-child { margin-bottom: 0; }
+.chat-md-heading {
+  margin: 0 0 6px;
+  font-size: 1.08em;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.chat-md-heading:first-child { margin-top: 0; }
+.chat-md-list {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+.chat-md-list:last-child { margin-bottom: 0; }
+.chat-md-list li { margin-bottom: 2px; }
+.chat-md-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.92em;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.chat-msg pre {
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  overflow-x: auto;
+}
+.chat-msg pre:last-child { margin-bottom: 0; }
+.chat-msg pre code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
 }
 .chat-working {
   display: flex;

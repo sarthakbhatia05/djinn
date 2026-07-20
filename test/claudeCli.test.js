@@ -42,6 +42,75 @@ test('sendMessage spawns claude --resume with the session id', async () => {
   assert.deepStrictEqual(spawnFn.calls[0].args, ['--resume', 'abc', '--print', 'keep going', '--output-format', 'json']);
 });
 
+test('startSession with no options leaves args unchanged from current behavior', async () => {
+  const spawnFn = fakeSpawn({ stdout: '{}' });
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+
+  await cli.startSession('D:\\Projects\\demo', 'do the thing', {});
+
+  assert.deepStrictEqual(spawnFn.calls[0].args, ['--print', 'do the thing', '--output-format', 'json']);
+});
+
+test('startSession appends --model when options.model is given', async () => {
+  const spawnFn = fakeSpawn({ stdout: '{}' });
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+
+  await cli.startSession('D:\\Projects\\demo', 'do the thing', { model: 'claude-opus-4' });
+
+  assert.deepStrictEqual(spawnFn.calls[0].args, ['--print', 'do the thing', '--output-format', 'json', '--model', 'claude-opus-4']);
+});
+
+test('startSession appends --permission-mode when options.permissionMode is given', async () => {
+  const spawnFn = fakeSpawn({ stdout: '{}' });
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+
+  await cli.startSession('D:\\Projects\\demo', 'do the thing', { permissionMode: 'plan' });
+
+  assert.deepStrictEqual(spawnFn.calls[0].args, ['--print', 'do the thing', '--output-format', 'json', '--permission-mode', 'plan']);
+});
+
+test('startSession appends both --model and --permission-mode when both are given', async () => {
+  const spawnFn = fakeSpawn({ stdout: '{}' });
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+
+  await cli.startSession('D:\\Projects\\demo', 'do the thing', { model: 'claude-sonnet-4', permissionMode: 'acceptEdits' });
+
+  assert.deepStrictEqual(
+    spawnFn.calls[0].args,
+    ['--print', 'do the thing', '--output-format', 'json', '--model', 'claude-sonnet-4', '--permission-mode', 'acceptEdits']
+  );
+});
+
+test('sendMessage with no options leaves args unchanged from current behavior', async () => {
+  const spawnFn = fakeSpawn({ stdout: '{}' });
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+
+  await cli.sendMessage('abc', 'D:\\Projects\\demo', 'keep going', {});
+
+  assert.deepStrictEqual(spawnFn.calls[0].args, ['--resume', 'abc', '--print', 'keep going', '--output-format', 'json']);
+});
+
+test('sendMessage appends --model and --permission-mode when given', async () => {
+  const spawnFn = fakeSpawn({ stdout: '{}' });
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+
+  await cli.sendMessage('abc', 'D:\\Projects\\demo', 'keep going', { model: 'claude-haiku-4', permissionMode: 'bypassPermissions' });
+
+  assert.deepStrictEqual(
+    spawnFn.calls[0].args,
+    ['--resume', 'abc', '--print', 'keep going', '--output-format', 'json', '--model', 'claude-haiku-4', '--permission-mode', 'bypassPermissions']
+  );
+});
+
+test('empty-string model/permissionMode are treated as absent (no flags appended)', async () => {
+  const spawnFn = fakeSpawn({ stdout: '{}' });
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+
+  await cli.startSession('D:\\Projects\\demo', 'do the thing', { model: '', permissionMode: '' });
+
+  assert.deepStrictEqual(spawnFn.calls[0].args, ['--print', 'do the thing', '--output-format', 'json']);
+});
+
 test('isRunning is true while the process is active and false after it closes', async () => {
   let resolveClose;
   const spawnFn = () => {

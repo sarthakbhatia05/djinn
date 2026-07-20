@@ -52,13 +52,29 @@ function createClaudeCli({ spawnFn = spawn, claudeBin = 'claude', onStatusChange
     });
   }
 
-  function startSession(cwd, message) {
-    const trackId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return runOneShot(['--print', message, '--output-format', 'json'], cwd, trackId);
+  // Appends --model/--permission-mode when given a non-empty string. Values
+  // are passed through verbatim — no whitelist here, the CLI itself rejects
+  // bad permission-mode strings and that surfaces through the normal
+  // reject/502 path.
+  function appendPassthroughFlags(args, options) {
+    if (typeof options.model === 'string' && options.model.length > 0) {
+      args.push('--model', options.model);
+    }
+    if (typeof options.permissionMode === 'string' && options.permissionMode.length > 0) {
+      args.push('--permission-mode', options.permissionMode);
+    }
+    return args;
   }
 
-  function sendMessage(sessionId, cwd, message) {
-    return runOneShot(['--resume', sessionId, '--print', message, '--output-format', 'json'], cwd, sessionId);
+  function startSession(cwd, message, options = {}) {
+    const trackId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const args = appendPassthroughFlags(['--print', message, '--output-format', 'json'], options);
+    return runOneShot(args, cwd, trackId);
+  }
+
+  function sendMessage(sessionId, cwd, message, options = {}) {
+    const args = appendPassthroughFlags(['--resume', sessionId, '--print', message, '--output-format', 'json'], options);
+    return runOneShot(args, cwd, sessionId);
   }
 
   return { isRunning, startSession, sendMessage, getActiveCount, getActiveIds };
