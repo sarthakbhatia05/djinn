@@ -845,12 +845,6 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   color: var(--text-faint);
   margin-top: 4px;
 }
-.detail-usage {
-  font-size: 11px;
-  color: var(--text-faint);
-  margin-top: 2px;
-}
-.detail-usage[hidden] { display: none; }
 .drawer-close {
   cursor: pointer;
   color: var(--text-faint);

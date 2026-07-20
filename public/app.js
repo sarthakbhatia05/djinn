@@ -9,10 +9,6 @@
     selectedDirectory: null,
     activeCount: 0,
     settings: null,
-    // Cumulative cost/token figures the claude CLI reports per invocation —
-    // NOT an account-level quota or rate-limit status (the CLI exposes no
-    // such thing). Shape matches GET /api/usage: { allTime, sessions }.
-    usage: { allTime: { costUsd: 0, inputTokens: 0, outputTokens: 0, callCount: 0 }, sessions: {} },
     drawerSize: readDrawerSize(), // function declarations hoist, so this is fine
     drawerMinimized: false,
     drawerWidthPx: readDrawerWidthPx(),
@@ -162,15 +158,13 @@
   // ---------- data loads ----------
 
   async function loadSessions() {
-    const [sessions, activeCountResult, usage] = await Promise.all([
+    const [sessions, activeCountResult] = await Promise.all([
       guarded(fetchJson('/api/sessions'), 'Failed to load sessions'),
       guarded(fetchJson('/api/sessions/active-count'), 'Failed to load active session count'),
-      guarded(fetchJson('/api/usage'), 'Failed to load usage'),
     ]);
     if (sessions === null) return;
     state.sessions = sessions;
     state.activeCount = activeCountResult ? activeCountResult.activeCount : 0;
-    if (usage !== null) state.usage = usage;
     seedViewedBaseline();
     renderSessions();
     updateHeaderStats();
@@ -773,22 +767,6 @@
     drawer.querySelector('.detail-title').textContent = session.title || '(no summary yet)';
     drawer.querySelector('.detail-meta').textContent =
       `${session.projectName || session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
-
-    // Per-session cost the claude CLI has reported for this session so far
-    // (summed across every dashboard-sent message). Hidden entirely until
-    // there's at least one recorded call — most sessions opened from a
-    // terminal, not the dashboard, will never have a claude-CLI-JSON figure
-    // for the dashboard to show.
-    const usageEl = document.getElementById('detail-usage');
-    if (usageEl) {
-      const sessionUsage = state.usage && state.usage.sessions && state.usage.sessions[session.id];
-      if (sessionUsage && sessionUsage.callCount > 0) {
-        usageEl.textContent = `Session cost: ${formatCurrency(sessionUsage.costUsd)}`;
-        usageEl.hidden = false;
-      } else {
-        usageEl.hidden = true;
-      }
-    }
   }
 
   async function loadChatMessages(sessionId) {
@@ -2038,15 +2016,6 @@
 
     const allCountEl = document.getElementById('all-sessions-count');
     if (allCountEl) allCountEl.textContent = String(state.sessions.length);
-
-    // All-time cost the claude CLI has reported across every call this
-    // dashboard has made — a running total, not an account-level quota or
-    // rate-limit reading (the CLI exposes no such thing).
-    const usageAllTimeEl = document.getElementById('usage-alltime-value');
-    if (usageAllTimeEl) {
-      const allTime = (state.usage && state.usage.allTime) || {};
-      usageAllTimeEl.textContent = formatCurrency(allTime.costUsd);
-    }
 
     const subEl = document.getElementById('section-header-sub');
     if (subEl) {

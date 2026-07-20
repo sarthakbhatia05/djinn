@@ -3,22 +3,8 @@ const express = require('express');
 const { normalizePath } = require('../lib/settingsStore');
 const { asyncHandler } = require('../lib/asyncHandler');
 
-function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, settingsStore, usageStore }) {
+function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, settingsStore }) {
   const router = express.Router();
-
-  // Persists the cost/token figures a claude CLI JSON result carries, if
-  // any. `usageStore` is optional (some callers/tests don't inject it) and
-  // a result can lack a session id (e.g. an error response) — in either
-  // case this is a silent no-op rather than a throw. Missing cost/token
-  // fields on the result itself are defaulted to 0 inside usageStore.
-  function recordUsageFromResult(sessionId, result) {
-    if (!usageStore || !sessionId) return;
-    usageStore.recordUsage(sessionId, {
-      costUsd: result && result.total_cost_usd,
-      inputTokens: result && result.usage && result.usage.input_tokens,
-      outputTokens: result && result.usage && result.usage.output_tokens,
-    });
-  }
 
   router.get('/', (req, res) => {
     let sessions = sessionStore.listSessions();
@@ -53,8 +39,6 @@ function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, sett
     // Starting a session in an untracked directory implies the user wants
     // to see it — add it to the allowlist so it doesn't vanish from view.
     if (settingsStore) settingsStore.addProject(cwd);
-    // A fresh session's real id isn't known until the CLI returns it.
-    recordUsageFromResult(result && result.session_id, result);
     res.status(201).json(result);
   }));
 
@@ -85,7 +69,6 @@ function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, sett
       return;
     }
     const result = await claudeCli.sendMessage(req.params.id, session.projectPath, message, { model, permissionMode });
-    recordUsageFromResult((result && result.session_id) || req.params.id, result);
     res.json(result);
   }));
 

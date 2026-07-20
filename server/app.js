@@ -9,7 +9,6 @@ const { createSettingsRouter } = require('./routes/settings');
 const { createCommandsRouter } = require('./routes/commands');
 const { createClaudeConfigRouter } = require('./routes/claudeConfig');
 const { createMcpRouter } = require('./routes/mcp');
-const { createUsageRouter } = require('./routes/usage');
 
 function createApp(deps = {}) {
   const app = express();
@@ -29,7 +28,6 @@ function createApp(deps = {}) {
   app.use('/api/commands', createCommandsRouter(deps));
   app.use('/api/claude-defaults', createClaudeConfigRouter(deps));
   app.use('/api/mcp', createMcpRouter(deps));
-  app.use('/api/usage', createUsageRouter(deps));
 
   // Centralized error handler. Any route that calls next(err) — or, for an
   // async handler, rejects via the asyncHandler wrapper — lands here instead
