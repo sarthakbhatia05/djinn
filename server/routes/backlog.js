@@ -1,5 +1,20 @@
 const express = require('express');
 
+// Mass-assignment guard: PATCH must never let a client overwrite id/createdAt
+// (or any other field we don't know about) by passing req.body straight
+// through to the store. Only these fields are writable via this route.
+const UPDATABLE_FIELDS = ['title', 'repoPath', 'priority', 'done'];
+
+function pickUpdatableFields(body) {
+  const changes = {};
+  for (const key of UPDATABLE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) {
+      changes[key] = body[key];
+    }
+  }
+  return changes;
+}
+
 function createBacklogRouter({ backlogStore }) {
   const router = express.Router();
 
@@ -17,7 +32,8 @@ function createBacklogRouter({ backlogStore }) {
   });
 
   router.patch('/:id', (req, res) => {
-    const updated = backlogStore.update(req.params.id, req.body);
+    const changes = pickUpdatableFields(req.body || {});
+    const updated = backlogStore.update(req.params.id, changes);
     if (!updated) {
       res.status(404).json({ error: 'not found' });
       return;

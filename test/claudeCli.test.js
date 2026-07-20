@@ -179,6 +179,56 @@ test('getActiveCount is 0 initially, 1 while a run is in flight, and 0 after it 
   assert.strictEqual(cli.getActiveCount(), 0);
 });
 
+test('cancel kills the running child, resolves false->true correctly, and rejects the pending promise with a cancelled flag', async () => {
+  let killed = false;
+  const spawnFn = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {
+      killed = true;
+      process.nextTick(() => child.emit('close', null));
+    };
+    return child;
+  };
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+
+  const promise = cli.startSession('D:\\demo', 'go');
+  const [trackId] = cli.getActiveIds();
+
+  const result = cli.cancel(trackId);
+
+  assert.strictEqual(result, true);
+  assert.strictEqual(killed, true);
+  await assert.rejects(promise, (err) => err.cancelled === true);
+  assert.strictEqual(cli.isRunning(trackId), false);
+});
+
+test('cancel returns false when trackId is not running', () => {
+  const spawnFn = fakeSpawn({ stdout: '{}' });
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude' });
+  assert.strictEqual(cli.cancel('never-started'), false);
+});
+
+test('cancel still drives onStatusChange to idle (close handler cleanup fires on kill)', async () => {
+  const events = [];
+  const spawnFn = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => { process.nextTick(() => child.emit('close', null)); };
+    return child;
+  };
+  const cli = createClaudeCli({ spawnFn, claudeBin: 'claude', onStatusChange: (id, status) => events.push(status) });
+
+  const promise = cli.startSession('D:\\demo', 'go');
+  const [trackId] = cli.getActiveIds();
+  cli.cancel(trackId);
+  await promise.catch(() => {});
+
+  assert.deepStrictEqual(events, ['running', 'idle']);
+});
+
 test('onStatusChange fires idle only once when spawn errors then closes', async () => {
   const spawnFn = () => {
     const child = new EventEmitter();

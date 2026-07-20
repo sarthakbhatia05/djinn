@@ -72,3 +72,18 @@ test('PUT then GET /api/memory/project round-trips for a given path', async () =
   assert.deepStrictEqual(body, { text: 'per-project notes' });
   server.close();
 });
+
+test('GET /api/memory/common returns JSON (not HTML) when the store throws', async () => {
+  const memoryStore = {
+    getCommon: () => { throw new Error('disk read failed'); },
+    setCommon: () => ({}),
+    getProject: () => ({ text: '' }),
+    setProject: () => ({}),
+  };
+  const server = createApp(makeDeps(memoryStore)).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'GET', '/api/memory/common');
+  assert.strictEqual(status, 500);
+  assert.ok(body && body.error);
+  server.close();
+});

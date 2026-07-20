@@ -75,3 +75,51 @@ test('DELETE /api/backlog/:id returns 204', async () => {
   assert.strictEqual(status, 204);
   server.close();
 });
+
+test('PATCH /api/backlog/:id ignores id and createdAt from the request body (mass-assignment guard)', async () => {
+  let stored = {
+    id: '1',
+    title: 'old title',
+    repoPath: 'D:/demo',
+    priority: 'medium',
+    done: false,
+    createdAt: '2020-01-01T00:00:00.000Z',
+  };
+  const backlogStore = {
+    list: () => [stored],
+    add: () => {},
+    update: (id, changes) => {
+      // The route must never forward id/createdAt to the store, regardless
+      // of what the client sent.
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(changes, 'id'), false);
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(changes, 'createdAt'), false);
+      if (id !== stored.id) return null;
+      stored = { ...stored, ...changes };
+      return stored;
+    },
+  };
+  const server = createApp(makeDeps(backlogStore)).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'PATCH', '/api/backlog/1', {
+    id: 'hacked-id',
+    createdAt: '1999-01-01T00:00:00.000Z',
+    title: 'new title',
+    done: true,
+  });
+  assert.strictEqual(status, 200);
+  assert.strictEqual(body.id, '1');
+  assert.strictEqual(body.createdAt, '2020-01-01T00:00:00.000Z');
+  assert.strictEqual(body.title, 'new title');
+  assert.strictEqual(body.done, true);
+  server.close();
+});
+
+test('PATCH /api/backlog/:id returns JSON (not HTML) when the store throws', async () => {
+  const backlogStore = { list: () => [], add: () => {}, update: () => { throw new Error('disk full'); } };
+  const server = createApp(makeDeps(backlogStore)).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'PATCH', '/api/backlog/1', { done: true });
+  assert.strictEqual(status, 500);
+  assert.ok(body && body.error);
+  server.close();
+});

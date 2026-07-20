@@ -250,3 +250,96 @@ test('GET /api/projects returns the project list', async () => {
   assert.strictEqual(body[0].projectFolder, 'D--demo');
   server.close();
 });
+
+test('GET /api/projects returns JSON (not HTML) when the store throws', async () => {
+  const deps = makeDeps({
+    sessionStore: { listSessions: () => [], listProjects: () => { throw new Error('boom'); }, readMessages: () => null },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'GET', '/api/projects');
+  assert.strictEqual(status, 500);
+  assert.ok(body && body.error);
+  server.close();
+});
+
+test('GET /api/sessions returns JSON (not HTML) when sessionStore throws', async () => {
+  const deps = makeDeps({
+    sessionStore: { listSessions: () => { throw new Error('boom'); }, listProjects: () => [], readMessages: () => null },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'GET', '/api/sessions');
+  assert.strictEqual(status, 500);
+  assert.ok(body && body.error);
+  server.close();
+});
+
+test('POST /api/sessions returns JSON (not HTML), no longer 502, when claudeCli.startSession rejects', async () => {
+  const deps = makeDeps({
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async () => { throw new Error('claude exited with code 1: boom'); },
+      sendMessage: async () => ({}),
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'POST', '/api/sessions', { cwd: 'D:\\demo', message: 'go' });
+  assert.strictEqual(status, 500);
+  assert.ok(body && body.error);
+  // The raw claude/CLI error text must not leak to the client for an
+  // unexpected 5xx failure.
+  assert.notStrictEqual(body.error, 'claude exited with code 1: boom');
+  server.close();
+});
+
+test('POST /api/sessions/:id/message returns JSON (not HTML) when claudeCli.sendMessage rejects', async () => {
+  const deps = makeDeps({
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async () => ({}),
+      sendMessage: async () => { throw new Error('claude exited with code 1: boom'); },
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
+  assert.strictEqual(status, 500);
+  assert.ok(body && body.error);
+  server.close();
+});
+
+test('POST /api/sessions/:id/cancel cancels a running session', async () => {
+  const deps = makeDeps({
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async () => ({}),
+      sendMessage: async () => ({}),
+      cancel: (id) => id === 's1',
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'POST', '/api/sessions/s1/cancel');
+  assert.strictEqual(status, 200);
+  assert.deepStrictEqual(body, { cancelled: true });
+  server.close();
+});
+
+test('POST /api/sessions/:id/cancel 404s when nothing is running under that id', async () => {
+  const deps = makeDeps({
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async () => ({}),
+      sendMessage: async () => ({}),
+      cancel: () => false,
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'POST', '/api/sessions/unknown/cancel');
+  assert.strictEqual(status, 404);
+  assert.deepStrictEqual(body, { error: 'session not running' });
+  server.close();
+});
