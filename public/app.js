@@ -757,6 +757,13 @@
       label.style.color = status === 'running' ? 'var(--accent)' : 'var(--text-faint)';
     }
 
+    const cancelBtn = document.getElementById('detail-cancel-btn');
+    if (cancelBtn) {
+      cancelBtn.hidden = status !== 'running';
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = 'Stop';
+    }
+
     drawer.querySelector('.detail-title').textContent = session.title || '(no summary yet)';
     drawer.querySelector('.detail-meta').textContent =
       `${session.projectName || session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
@@ -949,6 +956,37 @@
     if (!state.activeDetailId) return;
     const session = state.sessions.find((s) => s.id === state.activeDetailId);
     if (session) renderDetail(session);
+  }
+
+  // Killing a running agent mid-task can lose in-progress work, so this asks
+  // first — same window.confirm pattern used for deleting a backlog item.
+  // On success the running indicator is greyed out immediately (optimistic);
+  // the next WebSocket session-status push or poll will confirm or correct it.
+  async function cancelRunningSession() {
+    const sessionId = state.activeDetailId;
+    if (!sessionId) return;
+    if (!window.confirm('Cancel this running session? Any in-progress work may be lost.')) return;
+
+    const btn = document.getElementById('detail-cancel-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Cancelling…'; }
+
+    const result = await guarded(
+      fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: 'POST' }),
+      'Failed to cancel the session'
+    );
+
+    if (result === null || !result.cancelled) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Stop'; }
+      return;
+    }
+
+    showToast('Session cancelled.', false);
+    const session = state.sessions.find((s) => s.id === sessionId);
+    if (session) session.isRunning = false;
+    renderSessions();
+    updateHeaderStats();
+    if (state.activeDetailId === sessionId && session) renderDetail(session);
+    await loadSessions();
   }
 
   function closeDetail() {
@@ -1502,6 +1540,138 @@
       row.appendChild(badge);
       body.appendChild(row);
     }
+  }
+
+  // ---------- quick switcher (Cmd/Ctrl+K) ----------
+  //
+  // A minimal filter-and-jump tool over the session list already loaded into
+  // state.sessions — no server round-trip. Matches title and project name,
+  // case-insensitive substring. Enter/click on a result reuses openDetail(),
+  // the same function the session cards call, so there's exactly one place
+  // that opens the drawer.
+
+  const QUICK_SWITCHER_LIMIT = 30;
+
+  const quickSwitcherState = {
+    items: [],
+    activeIndex: 0,
+  };
+
+  function quickSwitcherMatches(query) {
+    const q = query.trim().toLowerCase();
+    const pool = q
+      ? state.sessions.filter((s) => {
+          const title = (s.title || '').toLowerCase();
+          const project = (s.projectName || s.projectFolder || '').toLowerCase();
+          return title.includes(q) || project.includes(q);
+        })
+      : state.sessions;
+    return pool.slice(0, QUICK_SWITCHER_LIMIT);
+  }
+
+  function renderQuickSwitcherResults() {
+    const list = document.getElementById('quick-switcher-results');
+    if (!list) return;
+    list.textContent = '';
+
+    if (quickSwitcherState.items.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'quick-switcher-empty';
+      empty.textContent = 'No matching sessions';
+      list.appendChild(empty);
+      return;
+    }
+
+    quickSwitcherState.items.forEach((session, idx) => {
+      const row = document.createElement('div');
+      row.className = `quick-switcher-item${idx === quickSwitcherState.activeIndex ? ' quick-switcher-item--active' : ''}`;
+
+      const titleRow = document.createElement('div');
+      titleRow.className = 'quick-switcher-item-title';
+      const dot = document.createElement('span');
+      dot.className = `quick-switcher-item-status${session.isRunning ? ' quick-switcher-item-status--running' : ''}`;
+      titleRow.appendChild(dot);
+      // Session title is user-supplied — a plain text node, never innerHTML.
+      titleRow.appendChild(document.createTextNode(session.title || '(no summary yet)'));
+
+      const meta = document.createElement('div');
+      meta.className = 'quick-switcher-item-meta';
+      meta.textContent = `${session.projectName || session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
+
+      row.appendChild(titleRow);
+      row.appendChild(meta);
+      // mousedown (not click) fires before the input would blur the popup away.
+      row.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        selectQuickSwitcherItem(idx);
+      });
+      list.appendChild(row);
+    });
+  }
+
+  function openQuickSwitcher() {
+    const overlay = document.getElementById('quick-switcher-overlay');
+    const input = document.getElementById('quick-switcher-input');
+    if (!overlay || !input) return;
+    overlay.hidden = false;
+    input.value = '';
+    quickSwitcherState.items = quickSwitcherMatches('');
+    quickSwitcherState.activeIndex = 0;
+    renderQuickSwitcherResults();
+    // The overlay was just un-hidden; focus on the next tick so it reliably lands.
+    setTimeout(() => input.focus(), 0);
+  }
+
+  function closeQuickSwitcher() {
+    const overlay = document.getElementById('quick-switcher-overlay');
+    if (overlay) overlay.hidden = true;
+  }
+
+  function isQuickSwitcherOpen() {
+    const overlay = document.getElementById('quick-switcher-overlay');
+    return !!overlay && !overlay.hidden;
+  }
+
+  function moveQuickSwitcherActive(delta) {
+    if (quickSwitcherState.items.length === 0) return;
+    const n = quickSwitcherState.items.length;
+    quickSwitcherState.activeIndex = (quickSwitcherState.activeIndex + delta + n) % n;
+    renderQuickSwitcherResults();
+  }
+
+  function selectQuickSwitcherItem(idx) {
+    const session = quickSwitcherState.items[idx];
+    if (!session) return;
+    closeQuickSwitcher();
+    openDetail(session.id); // same function the session cards use
+  }
+
+  function wireQuickSwitcher() {
+    const input = document.getElementById('quick-switcher-input');
+    const overlay = document.getElementById('quick-switcher-overlay');
+    if (!input || !overlay) return;
+
+    input.addEventListener('input', () => {
+      quickSwitcherState.items = quickSwitcherMatches(input.value);
+      quickSwitcherState.activeIndex = 0;
+      renderQuickSwitcherResults();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveQuickSwitcherActive(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); moveQuickSwitcherActive(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); selectQuickSwitcherItem(quickSwitcherState.activeIndex); }
+      // Escape is handled by the document-level handler below.
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeQuickSwitcher();
+    });
+    document.addEventListener('keydown', (e) => {
+      const key = e.key ? e.key.toLowerCase() : '';
+      if ((e.metaKey || e.ctrlKey) && key === 'k') {
+        e.preventDefault();
+        openQuickSwitcher();
+      }
+    });
   }
 
   // ---------- new-session directory picker + command bar ----------
@@ -2181,6 +2351,7 @@
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
+        if (isQuickSwitcherOpen()) { closeQuickSwitcher(); return; }
         closeDirectoryMenus();
         closeProjectsModal();
         closeDetail();
@@ -2188,6 +2359,7 @@
     });
 
     wireSessionControls();
+    wireQuickSwitcher();
 
     document.getElementById('browse-directory-btn').addEventListener('click', browseForDirectory);
     document.getElementById('command-browse-directory-btn').addEventListener('click', browseForDirectory);
@@ -2249,6 +2421,7 @@
     document.getElementById('header-assistant-name').addEventListener('click', startHeaderRename);
 
     document.getElementById('detail-close-btn').addEventListener('click', closeDetail);
+    document.getElementById('detail-cancel-btn').addEventListener('click', cancelRunningSession);
     document.getElementById('detail-size-btn').addEventListener('click', cycleDrawerSize);
     document.getElementById('detail-minimize-btn').addEventListener('click', toggleDrawerMinimized);
     // A minimized drawer is mostly header, so let the header itself restore it.
