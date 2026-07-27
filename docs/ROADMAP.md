@@ -1,8 +1,9 @@
 # Roadmap & Follow-ups
 
-Current state: **210 tests passing, working locally, still no git remote.** The
-composer redesign, the project-path resolution fixes and the command pills sit
-on branch `composer-redesign` (4 commits), not merged to `master`.
+Current state: **210 tests passing, working locally, published to a private
+GitHub repo (`sarthakbhatia05/djinn`).** The composer redesign, the
+project-path resolution fixes and the command pills are merged into `master`
+and pushed; `master` is the default branch and the only one that matters.
 
 Since the last revision of this file, most of the original blockers closed:
 cross-platform folder picker, README, unified route error handling, theme

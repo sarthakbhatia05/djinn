@@ -1,15 +1,17 @@
-# Claude Code Dashboard
+# Djinn
 
-A local web app that gives one screen for managing Claude Code sessions across multiple projects: see every session with status and last activity, start a new session in a chosen directory, send follow-up instructions, keep a repo-tagged backlog, and edit shared + per-project memory.
+A local web app that gives one screen for managing Claude Code sessions across multiple projects: see every session with status and last activity, open a chat view for any of them, start a new session in a chosen directory, send follow-up instructions, keep a repo-tagged backlog, and edit shared + per-project memory.
 
-Status: **v1 complete and working locally. Not yet pushed to any remote.** See `docs/ROADMAP.md` for what's next.
+The project is named **Djinn** (`package.json` → `djinn`); `README.md` is the outward-facing description. On first run the user names their own assistant, and that name — not "Claude" — is what the UI says. The `claude` CLI remains the engine; Djinn reads its transcripts and spawns it.
+
+Status: **working locally, MIT licensed, published to a private GitHub repo (`sarthakbhatia05/djinn`) on branch `master`.** See `docs/ROADMAP.md` for what's next.
 
 ## Run it
 
 ```bash
 npm install
 npm start          # http://127.0.0.1:4317
-npm test           # 68 tests
+npm test           # 210 tests
 ```
 
 ## Critical conventions — read before editing
@@ -26,6 +28,8 @@ npm test           # 68 tests
 
 **Never render user-supplied text with `innerHTML`.** Session titles and backlog titles come from user prompts. Use the safe-text path in `public/app.js`; `innerHTML` is only for static template literals.
 
+**No user-visible string says "Claude".** The user named their assistant during onboarding, and every message about it goes through the `assistantName()` helper in `public/app.js` (falls back to `"Assistant"` when unset). Hardcoding "Claude" in a toast, empty state, or status label breaks that illusion. Naming the `claude` CLI as the underlying engine is fine — that's a fact about the tool, not the persona.
+
 ## Architecture
 
 ```
@@ -33,14 +37,17 @@ Browser (public/)  <-- HTTP + WebSocket -->  Local server (server/)
                                               - scans ~/.claude/projects/**/*.jsonl
                                               - reads ~/.claude.json (read-only)
                                               - spawns the `claude` CLI
-                                              - owns data/ (backlog, memory, recents)
+                                              - owns data/ (backlog, memory, settings, recents)
 ```
 
 - `server/app.js` — `createApp(deps)`. Pure dependency injection: it constructs nothing itself, so tests inject fakes. Real wiring lives only in `server/index.js`.
-- `server/lib/` — one responsibility each: `pathEncoding` (folder-name encoding), `jsonStore` (the single persistence primitive), `sessionStore` (transcript scanning), `claudeCli` (process spawning), `backlogStore`, `memoryStore`, `recentDirectories`, `folderPicker`.
-- `server/routes/` — thin HTTP wrappers over the stores.
-- `public/` — `index.html` (shell), `styles.css` (design tokens), `format.js` (shared with Node tests via a guarded export), `app.js` (all behavior).
-- `data/` — gitignored runtime state. Never commit it; it holds the user's real backlog and memory.
+- `server/lib/` — one responsibility each, in rough dependency order:
+  - Persistence: `jsonStore` (the single persistence primitive — everything below that writes goes through it), `settingsStore`, `backlogStore`, `memoryStore`, `recentDirectories`.
+  - Claude Code integration: `pathEncoding` (folder-name encoding), `sessionStore` (transcript scanning), `claudeCli` (process spawning), `claudeUserConfig` (read-only `~/.claude.json` access), `transcriptWatcher` (`fs.watch` + throttle, pushes chat updates over the WebSocket), `slashCommands`, `mcpStatus`.
+  - Pickers and plumbing: `folderPicker`, `filePicker` (the `@` file picker), `asyncHandler` (the one place route errors are turned into responses — wrap every async handler in it).
+- `server/routes/` — thin HTTP wrappers over the stores, one file per resource: `sessions`, `backlog`, `memory`, `settings`, `projects`, `directories`, `commands`, `mcp`, `claudeConfig`.
+- `public/` — `index.html` (shell), `styles.css` (design tokens + the CSS-only orb), `format.js` and `sessionSelect.js` (both shared with Node tests via a guarded export), `app.js` (all behavior).
+- `data/` — gitignored runtime state. Never commit it; it holds the user's real backlog, memory, and settings.
 
 ## Domain gotchas (each cost real debugging time)
 
@@ -56,7 +63,7 @@ The dot is the one that bites. This file used to omit it, and so did `encodeProj
 
 **Long agent runs.** `--print` blocks until the agent finishes, so `requestTimeout`/`headersTimeout` are set to 0. Node's 300s default would otherwise abort the HTTP request while the child process kept running.
 
-## Known v1 limitation
+## Known limitation
 
 `isRunning` only reflects sessions the dashboard itself spawned. Sessions started in a terminal show their history but never light up as running — there's no reliable on-disk "is running" flag. New sessions spawned from the dashboard are counted via `GET /api/sessions/active-count`, because their real session id isn't known until the CLI returns.
 
