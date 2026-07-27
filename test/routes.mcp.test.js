@@ -16,6 +16,9 @@ function request(port, method, urlPath) {
 
 function makeDeps({ mcpStatus }) {
   return {
+    // The app's error handler logs unexpected 5xx failures; keep any the
+    // tests below provoke out of `npm test` output.
+    logger: { error: () => {} },
     sessionStore: { listSessions: () => [], listProjects: () => [] },
     claudeCli: { isRunning: () => false, startSession: async () => ({}), sendMessage: async () => ({}) },
     recentDirectories: { add: () => {}, list: () => [] },

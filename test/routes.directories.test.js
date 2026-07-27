@@ -16,6 +16,10 @@ function request(port, method, urlPath) {
 
 function makeDeps({ recentDirectories, folderPicker, filePicker }) {
   return {
+    // The app's error handler logs unexpected 5xx failures; the throwing-store
+    // tests below deliberately provoke some, so swallow them here rather than
+    // printing stack traces on every `npm test`.
+    logger: { error: () => {} },
     sessionStore: { listSessions: () => [], listProjects: () => [] },
     claudeCli: { isRunning: () => false, startSession: async () => ({}), sendMessage: async () => ({}) },
     recentDirectories,

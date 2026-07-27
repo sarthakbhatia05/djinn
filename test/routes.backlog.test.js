@@ -22,6 +22,10 @@ function request(port, method, urlPath, body) {
 
 function makeDeps(backlogStore) {
   return {
+    // The app's error handler logs unexpected 5xx failures; the store-throws
+    // test below deliberately provokes one, so swallow it here rather than
+    // printing a stack trace on every `npm test`.
+    logger: { error: () => {} },
     sessionStore: { listSessions: () => [], listProjects: () => [] },
     claudeCli: { isRunning: () => false, startSession: async () => ({}), sendMessage: async () => ({}) },
     recentDirectories: { add: () => {}, list: () => [] },

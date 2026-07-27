@@ -83,7 +83,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Claude Code Dashboard running at http://127.0.0.1:${PORT} (local only)`);
+  console.log(`Djinn running at http://127.0.0.1:${PORT} (local only)`);
 });
 
 // Agent runs are invoked with `--print` and block the HTTP request open for

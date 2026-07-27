@@ -6,7 +6,9 @@ const { createApp } = require('../server/app');
 
 function request(port, method, urlPath, body) {
   return new Promise((resolve, reject) => {
-    const data = body ? JSON.stringify(body) : null;
+    // A string body is sent verbatim, so a test can post deliberately
+    // malformed JSON and exercise the 4xx path through the error handler.
+    const data = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
     const req = http.request(
       { host: 'localhost', port, path: urlPath, method, headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {} },
       (res) => {
@@ -21,8 +23,17 @@ function request(port, method, urlPath, body) {
   });
 }
 
+// Records what the app's error handler logs. Also keeps the negative-path
+// tests below from printing real stack traces during `npm test` — the default
+// logger is console, so without this every 500 test would spray output.
+function makeLogger() {
+  const errors = [];
+  return { errors, error: (...args) => errors.push(args) };
+}
+
 function makeDeps(overrides = {}) {
   return {
+    logger: makeLogger(),
     sessionStore: {
       listSessions: () => [{ id: 's1', projectPath: 'D:/demo', pathResolved: true, title: 'x', lastActivity: '2026-07-15T00:00:00.000Z' }],
       listProjects: () => [{ projectPath: 'D:/demo', projectFolder: 'D--demo', sessionCount: 1, lastActivity: '2026-07-15T00:00:00.000Z' }],
@@ -307,6 +318,95 @@ test('POST /api/sessions/:id/message returns JSON (not HTML) when claudeCli.send
   const { status, body } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
   assert.strictEqual(status, 500);
   assert.ok(body && body.error);
+  server.close();
+});
+
+test('an unexpected 5xx is logged server-side with the full error, stack included', async () => {
+  const logger = makeLogger();
+  const boom = new Error('spawn claude ENOENT');
+  const deps = makeDeps({
+    logger,
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async () => { throw boom; },
+      sendMessage: async () => ({}),
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'POST', '/api/sessions', { cwd: 'D:\\demo', message: 'go' });
+  assert.strictEqual(status, 500);
+  // Client-facing body is unchanged: still the generic message, no leak.
+  assert.deepStrictEqual(body, { error: 'Internal server error' });
+  assert.strictEqual(logger.errors.length, 1);
+  const [label, logged] = logger.errors[0];
+  assert.match(label, /POST \/api\/sessions/);
+  // The Error object itself must be handed to the logger — not err.message —
+  // or the stack (the whole point) is thrown away.
+  assert.strictEqual(logged, boom);
+  assert.ok(logged.stack);
+  server.close();
+});
+
+test('a synchronous store failure is logged too', async () => {
+  const logger = makeLogger();
+  const deps = makeDeps({
+    logger,
+    sessionStore: { listSessions: () => { throw new Error('boom'); }, listProjects: () => [], readMessages: () => null },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'GET', '/api/sessions');
+  assert.strictEqual(status, 500);
+  assert.deepStrictEqual(body, { error: 'Internal server error' });
+  assert.strictEqual(logger.errors.length, 1);
+  assert.strictEqual(logger.errors[0][1].message, 'boom');
+  server.close();
+});
+
+test('a deliberate 4xx sent by a route logs nothing', async () => {
+  const logger = makeLogger();
+  const server = createApp(makeDeps({ logger })).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'POST', '/api/sessions', {});
+  assert.strictEqual(status, 400);
+  assert.ok(body.error);
+  assert.deepStrictEqual(logger.errors, []);
+  server.close();
+});
+
+test('a 4xx that travels through the error handler logs nothing and still passes its message through', async () => {
+  const logger = makeLogger();
+  const server = createApp(makeDeps({ logger })).listen(0);
+  const { port } = server.address();
+  // Malformed JSON: express.json() rejects with a SyntaxError carrying
+  // status 400, which reaches the error handler rather than a route.
+  const { status, body } = await request(port, 'POST', '/api/sessions', '{ not json');
+  assert.strictEqual(status, 400);
+  // Unchanged behavior: below 500 the real message is passed through.
+  assert.ok(body.error && body.error !== 'Internal server error');
+  assert.deepStrictEqual(logger.errors, []);
+  server.close();
+});
+
+test('the logger defaults to console when no logger dependency is injected', async () => {
+  const deps = makeDeps({
+    logger: undefined,
+    sessionStore: { listSessions: () => { throw new Error('boom'); }, listProjects: () => [], readMessages: () => null },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const originalError = console.error;
+  const calls = [];
+  console.error = (...args) => calls.push(args);
+  try {
+    const { status } = await request(port, 'GET', '/api/sessions');
+    assert.strictEqual(status, 500);
+  } finally {
+    console.error = originalError;
+  }
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0][1].message, 'boom');
   server.close();
 });
 
