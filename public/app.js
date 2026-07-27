@@ -46,8 +46,6 @@
     const titleEl = document.getElementById('header-assistant-name');
     if (titleEl) titleEl.textContent = name ? `${name} · console` : 'console';
     document.title = name ? `${name} — Djinn` : 'Djinn';
-    const workingText = document.getElementById('chat-working-text');
-    if (workingText) workingText.textContent = `${assistantName()} is working…`;
     updateCommandBarHint();
   }
 
@@ -757,11 +755,18 @@
       label.style.color = status === 'running' ? 'var(--accent)' : 'var(--text-faint)';
     }
 
-    const cancelBtn = document.getElementById('detail-cancel-btn');
-    if (cancelBtn) {
-      cancelBtn.hidden = status !== 'running';
-      cancelBtn.disabled = false;
-      cancelBtn.textContent = 'Stop';
+    setDetailComposerRunning(status === 'running');
+    renderMcpChip(session);
+    // First measurement that can actually succeed: the drawer was display:none
+    // when the composer was wired, so scrollHeight read 0 there and the height
+    // was left at 'auto'. Only measure while it is still unmeasured —
+    // renderDetail also runs on every poll and WebSocket push, and resetting
+    // the height mid-typing resets the scroll position of a textarea the user
+    // is in the middle of using.
+    const detailComposerInput = composerInput(COMPOSERS.detail);
+    const measured = detailComposerInput && detailComposerInput.style.height;
+    if (detailComposerInput && (!measured || measured === 'auto' || measured === '0px')) {
+      autoGrowComposer(detailComposerInput);
     }
 
     drawer.querySelector('.detail-title').textContent = session.title || '(no summary yet)';
@@ -967,8 +972,10 @@
     if (!sessionId) return;
     if (!window.confirm('Cancel this running session? Any in-progress work may be lost.')) return;
 
-    const btn = document.getElementById('detail-cancel-btn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Cancelling…'; }
+    const btn = document.getElementById('detail-send-btn');
+    const statusText = document.getElementById('detail-composer-status-text');
+    if (btn) btn.disabled = true;
+    if (statusText) statusText.textContent = 'stopping…';
 
     const result = await guarded(
       fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: 'POST' }),
@@ -976,13 +983,20 @@
     );
 
     if (result === null || !result.cancelled) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Stop'; }
+      setDetailComposerRunning(true);
       return;
     }
 
     showToast('Session cancelled.', false);
     const session = state.sessions.find((s) => s.id === sessionId);
     if (session) session.isRunning = false;
+    // Unconditionally, before anything that can bail out: this is the only
+    // path that disables the send button, and every route back to enabled ran
+    // through a renderDetail that isn't guaranteed to happen — not when the
+    // session is missing from state.sessions (a dashboard-spawned run whose
+    // real id isn't known yet), and not when the loadSessions below fails and
+    // returns early. Either left the composer permanently unusable.
+    setDetailComposerRunning(false);
     renderSessions();
     updateHeaderStats();
     if (state.activeDetailId === sessionId && session) renderDetail(session);
@@ -1184,7 +1198,10 @@
       const el = document.getElementById(id);
       if (el) {
         el.value = permission;
-        el.classList.toggle('control-select--armed', !!permission);
+        // The warn treatment lands on the wrapper so it covers the custom
+        // caret too — the select itself no longer has a box of its own.
+        const wrap = el.closest('.composer-select-wrap');
+        if (wrap) wrap.classList.toggle('composer-select-wrap--armed', !!permission);
       }
     }
   }
@@ -1230,7 +1247,7 @@
     manual: 'Manual',
     auto: 'Auto',
     dontAsk: "Don't Ask",
-    default: 'asks before risky actions',
+    default: 'Ask',
   };
 
   function labelDefaultOption(selectId, text) {
@@ -1262,6 +1279,57 @@
     return fields;
   }
 
+  // ---------- detail composer state ----------
+  //
+  // While the agent runs, the send control becomes Stop in place and the model
+  // and permission selects give way to the working indicator: those two only
+  // apply to the *next* message, and a session already in flight can't take one.
+  // Before this, #detail-send-btn had no isRunning wiring at all, so a second
+  // message could be fired at a busy agent — which lands both sends on one entry
+  // in claudeCli's running map, and the first to finish flips isRunning false
+  // while the second is still going.
+  function setDetailComposerRunning(running, statusText) {
+    const composer = document.getElementById('detail-composer');
+    const btn = document.getElementById('detail-send-btn');
+    const status = document.getElementById('detail-composer-status');
+    const text = document.getElementById('detail-composer-status-text');
+
+    if (composer) composer.classList.toggle('composer--running', running);
+    if (status) status.hidden = !running;
+    if (text && running) text.textContent = statusText || `${assistantName()} is working…`;
+    if (btn) {
+      btn.dataset.mode = running ? 'stop' : 'send';
+      btn.classList.toggle('composer-send--stop', running);
+      btn.textContent = running ? '■' : '↑';
+      btn.title = running ? 'Stop this session' : 'Send (Enter)';
+      btn.setAttribute('aria-label', running ? 'Stop this session' : 'Send');
+      btn.disabled = false;
+    }
+  }
+
+  // `claude mcp list` live-checks every server over the network (~15s), so it
+  // stays strictly on demand — see checkMcpStatus. What this adds is memory:
+  // once a project has been checked, the rail chip keeps reporting the result
+  // instead of going back to a bare "mcp" that says nothing.
+  const mcpStatusByPath = new Map(); // normalized project path -> { total, connected }
+
+  function renderMcpChip(session) {
+    const dot = document.getElementById('detail-mcp-dot');
+    const label = document.getElementById('detail-mcp-label');
+    if (!dot || !label) return;
+    const projectPath = session && session.projectPath;
+    const known = projectPath ? mcpStatusByPath.get(normalizeClientPath(projectPath)) : null;
+    dot.className = 'composer-chip-dot';
+    if (!known) {
+      label.textContent = 'mcp';
+      return;
+    }
+    label.textContent = String(known.total);
+    if (known.total > 0) {
+      dot.classList.add(known.connected === known.total ? 'composer-chip-dot--ok' : 'composer-chip-dot--warn');
+    }
+  }
+
   async function sendDetailMessage(message) {
     if (!state.activeDetailId) return;
     if (!message || !message.trim()) {
@@ -1269,10 +1337,7 @@
       return;
     }
     const sessionId = state.activeDetailId;
-    const workingEl = document.getElementById('chat-working');
-    const workingText = document.getElementById('chat-working-text');
-    if (workingText) workingText.textContent = `${assistantName()} is working…`;
-    if (workingEl) workingEl.hidden = false;
+    setDetailComposerRunning(true);
 
     try {
       await fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/message`, {
@@ -1287,17 +1352,63 @@
       console.error('Failed to send message to session', err);
       showToast(errorMessage);
     } finally {
-      if (workingEl) workingEl.hidden = true;
+      setDetailComposerRunning(false);
+      // The session's real status wins over the optimistic clear above.
+      updateOpenDetailIfPresent();
     }
+  }
+
+  // ---------- composers ----------
+  //
+  // Two prompt surfaces share one implementation: the command bar (starts a new
+  // session in the chosen directory) and the drawer footer (follow-up message to
+  // the open session). They differ only in where the project path comes from, so
+  // everything below is written against a context object — the auto-grow, the
+  // slash popup and the @ picker are defined once and can't drift apart.
+
+  const COMPOSERS = {
+    detail: {
+      inputId: 'detail-send-input',
+      popupId: 'slash-popup',
+      projectPath: () => {
+        const session = state.sessions.find((s) => s.id === state.activeDetailId);
+        return (session && session.projectPath) || null;
+      },
+    },
+    command: {
+      inputId: 'command-input',
+      popupId: 'command-slash-popup',
+      projectPath: () => currentTargetDirectory(),
+    },
+  };
+
+  function composerInput(ctx) { return document.getElementById(ctx.inputId); }
+
+  // The textarea carries no fixed height — it is re-measured against its own
+  // content on every change. scrollHeight only reports the content height once
+  // the current height is released, hence the reset to 'auto' first. The cap
+  // and the resulting scrollbar live in CSS (.composer-input).
+  function autoGrowComposer(input) {
+    if (!input) return;
+    input.style.height = 'auto';
+    // An unrendered textarea — the drawer's, before it is ever opened — reports
+    // scrollHeight 0, and pinning height:0 would collapse it the moment it did
+    // become visible. Leaving height:auto falls back to the rows="1" default,
+    // and renderDetail re-measures once the drawer is laid out.
+    if (input.scrollHeight > 0) input.style.height = `${input.scrollHeight}px`;
+  }
+
+  function clearComposer(input) {
+    if (!input) return;
+    input.value = '';
+    autoGrowComposer(input);
   }
 
   // ---------- slash-command autocomplete ----------
   //
-  // Detail composer only — it needs the open session's project path, which
-  // only the drawer's "open session" concept has (the new-session command
-  // bar has a chosen directory, not a session). Commands are cached per
-  // project path so retyping "/" doesn't refetch on every keystroke; a
-  // fetch failure is treated as "no commands available", not fatal.
+  // Commands are cached per project path so retyping "/" doesn't refetch on
+  // every keystroke; a fetch failure is treated as "no commands available",
+  // not fatal.
 
   const SLASH_TRIGGER_RE = /(?:^|\s)\/(\S*)$/;
   const commandsCache = new Map(); // normalized project path -> Promise<Array<{name, description, source}>>
@@ -1317,12 +1428,19 @@
     items: [],
     activeIndex: 0,
     matchStart: -1, // index into the input value where the "/" itself starts
+    ctx: null,      // which composer the popup currently belongs to
   };
 
+  // Only one popup can be open at a time, so this closes whichever composer
+  // owns it rather than taking a context argument — callers that just want the
+  // popup gone (Escape, closing the drawer, blur) don't have to know which.
   function closeSlashPopup() {
+    const ctx = slashState.ctx;
     slashState.open = false;
     slashState.items = [];
-    const popup = document.getElementById('slash-popup');
+    slashState.ctx = null;
+    if (!ctx) return;
+    const popup = document.getElementById(ctx.popupId);
     if (popup) {
       popup.hidden = true;
       popup.textContent = '';
@@ -1330,7 +1448,7 @@
   }
 
   function renderSlashPopup() {
-    const popup = document.getElementById('slash-popup');
+    const popup = slashState.ctx && document.getElementById(slashState.ctx.popupId);
     if (!popup) return;
     popup.textContent = '';
     if (slashState.items.length === 0) {
@@ -1366,7 +1484,7 @@
 
   function applySlashSelection(idx) {
     const cmd = slashState.items[idx];
-    const input = document.getElementById('detail-send-input');
+    const input = slashState.ctx && composerInput(slashState.ctx);
     if (!cmd || !input) return;
     const value = input.value;
     const cursor = input.selectionStart != null ? input.selectionStart : value.length;
@@ -1377,6 +1495,7 @@
     const newCursor = (before + inserted).length;
     input.setSelectionRange(newCursor, newCursor);
     input.focus();
+    autoGrowComposer(input);
     closeSlashPopup();
   }
 
@@ -1386,9 +1505,9 @@
     renderSlashPopup();
   }
 
-  async function handleDetailInputForSlash() {
-    const input = document.getElementById('detail-send-input');
-    if (!input || !state.activeDetailId) {
+  async function handleComposerSlash(ctx) {
+    const input = composerInput(ctx);
+    if (!input) {
       closeSlashPopup();
       return;
     }
@@ -1398,21 +1517,25 @@
       closeSlashPopup();
       return;
     }
+    // Only one popup is ever open. Hand-off between composers has to close the
+    // outgoing one first — overwriting slashState.ctx would otherwise strand
+    // the previous popup on screen with nothing left holding a reference to it.
+    if (slashState.ctx && slashState.ctx !== ctx) closeSlashPopup();
     slashState.open = true;
+    slashState.ctx = ctx;
     slashState.matchStart = match.index + (match[0].length - match[1].length - 1);
 
-    const session = state.sessions.find((s) => s.id === state.activeDetailId);
-    const projectPath = session && session.projectPath;
+    const projectPath = ctx.projectPath();
     if (!projectPath) {
       closeSlashPopup();
       return;
     }
 
-    const sessionAtFetch = state.activeDetailId;
+    const pathAtFetch = projectPath;
     const commands = await fetchCommandsForPath(projectPath);
     // The user may have kept typing, moved the caret off the slash token, or
-    // switched sessions entirely while this was in flight — re-check both.
-    if (state.activeDetailId !== sessionAtFetch) return;
+    // switched sessions/directories entirely while this was in flight.
+    if (slashState.ctx !== ctx || ctx.projectPath() !== pathAtFetch) return;
     const currentCursor = input.selectionStart != null ? input.selectionStart : input.value.length;
     const currentMatch = SLASH_TRIGGER_RE.exec(input.value.slice(0, currentCursor));
     if (!currentMatch) {
@@ -1433,7 +1556,7 @@
     renderSlashPopup();
   }
 
-  // ---------- add-file button (detail composer only) ----------
+  // ---------- rail buttons: @ (insert a file path) and / (slash commands) ----------
 
   function insertTextAtCursor(input, text) {
     const start = input.selectionStart != null ? input.selectionStart : input.value.length;
@@ -1443,17 +1566,62 @@
     const cursor = start + text.length;
     input.setSelectionRange(cursor, cursor);
     input.focus();
+    autoGrowComposer(input);
   }
 
-  async function browseForFile() {
+  async function browseForFile(ctx) {
     const result = await guarded(
       fetchJson('/api/directories/browse-file', { method: 'POST' }),
       'Failed to open the file picker'
     );
     if (result === null) return;
     if (!result.path) return; // user cancelled the native dialog
-    const input = document.getElementById('detail-send-input');
+    const input = composerInput(ctx);
     if (input) insertTextAtCursor(input, `@${result.path} `);
+  }
+
+  // Slash commands were fully wired but discoverable only through placeholder
+  // text that disappears the moment anyone types. The button types the "/" the
+  // user would have typed, so there is exactly one code path to the popup.
+  function openSlashFromButton(ctx) {
+    const input = composerInput(ctx);
+    if (!input) return;
+    const start = input.selectionStart != null ? input.selectionStart : input.value.length;
+    const needsSpace = start > 0 && !/\s$/.test(input.value.slice(0, start));
+    insertTextAtCursor(input, needsSpace ? ' /' : '/');
+    handleComposerSlash(ctx);
+  }
+
+  // Enter submits and Shift+Enter breaks the line — the convention every chat
+  // client uses, and the whole reason both inputs are textareas now. While the
+  // slash popup is open the arrow keys, Enter, Tab and Escape belong to it.
+  function wireComposer(ctx, onSubmit) {
+    const input = composerInput(ctx);
+    if (!input) return;
+
+    input.addEventListener('keydown', (e) => {
+      if (slashState.open && slashState.ctx === ctx) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveSlashActive(1); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); moveSlashActive(-1); return; }
+        if ((e.key === 'Enter' || e.key === 'Tab') && slashState.items.length > 0) {
+          e.preventDefault();
+          applySlashSelection(slashState.activeIndex);
+          return;
+        }
+        if (e.key === 'Escape') { e.preventDefault(); closeSlashPopup(); return; }
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        onSubmit();
+      }
+    });
+    input.addEventListener('input', () => {
+      autoGrowComposer(input);
+      handleComposerSlash(ctx);
+    });
+    input.addEventListener('click', () => handleComposerSlash(ctx));
+    input.addEventListener('blur', () => closeSlashPopup());
+    autoGrowComposer(input);
   }
 
   // ---------- MCP server status panel ----------
@@ -1508,6 +1676,12 @@
     }
 
     const servers = result.servers || [];
+    mcpStatusByPath.set(normalizeClientPath(projectPath), {
+      total: servers.length,
+      connected: servers.filter((s) => s.status === 'connected').length,
+    });
+    renderMcpChip(session);
+
     if (servers.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'mcp-panel-empty';
@@ -1787,7 +1961,32 @@
     updateCommandBarHint();
   }
 
+  // POST /api/sessions blocks until the agent finishes — `--print` is
+  // synchronous and requestTimeout is 0 — so this call can be outstanding for
+  // minutes with nothing on screen to say so. Without this flag the send button
+  // stays live the whole time and an impatient second click spawns a second
+  // agent in the same directory. Unlike the drawer's Stop, there is nothing to
+  // cancel here: the CLI hasn't returned a session id yet, so there is no id to
+  // cancel by. The control disables rather than turning into Stop.
+  let commandSendInFlight = false;
+
+  function setCommandComposerBusy(busy) {
+    commandSendInFlight = busy;
+    const composer = document.getElementById('command-composer');
+    const btn = document.getElementById('command-send-btn');
+    const status = document.getElementById('command-composer-status');
+    const text = document.getElementById('command-composer-status-text');
+    if (composer) composer.classList.toggle('composer--running', busy);
+    if (status) status.hidden = !busy;
+    if (text && busy) text.textContent = `${assistantName()} is working…`;
+    if (btn) {
+      btn.disabled = busy;
+      btn.title = busy ? 'Waiting for the agent to finish…' : 'Start a session (Enter)';
+    }
+  }
+
   async function startNewSession(cwd) {
+    if (commandSendInFlight) return;
     const input = document.getElementById('command-input');
     const message = input.value.trim();
     if (!message) {
@@ -1802,16 +2001,22 @@
     }
     showToast(`${assistantName()} is on it…`, false);
     const priorIds = new Set(state.sessions.map((s) => s.id));
-    const result = await guarded(
-      fetchJson('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd, message, ...currentModelAndPermissionFields() }),
-      }),
-      'Failed to start session'
-    );
+    setCommandComposerBusy(true);
+    let result;
+    try {
+      result = await guarded(
+        fetchJson('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd, message, ...currentModelAndPermissionFields() }),
+        }),
+        'Failed to start session'
+      );
+    } finally {
+      setCommandComposerBusy(false);
+    }
     if (result === null) return;
-    input.value = '';
+    clearComposer(input);
     showToast(`${assistantName()} finished the run — session added.`, false);
     await Promise.all([loadSessions(), loadProjects(), loadRecentDirectories()]);
     // This browser just created that session — it shouldn't show as unseen.
@@ -2366,9 +2571,11 @@
     document.getElementById('command-send-btn').addEventListener('click', () => {
       startNewSession(currentTargetDirectory());
     });
-    document.getElementById('command-input').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') startNewSession(currentTargetDirectory());
-    });
+    wireComposer(COMPOSERS.command, () => startNewSession(currentTargetDirectory()));
+    document.getElementById('command-attach-btn')
+      .addEventListener('click', () => browseForFile(COMPOSERS.command));
+    document.getElementById('command-slash-btn')
+      .addEventListener('click', () => openSlashFromButton(COMPOSERS.command));
 
     document.getElementById('backlog-add-btn').addEventListener('click', () => {
       const input = document.getElementById('backlog-input');
@@ -2421,7 +2628,6 @@
     document.getElementById('header-assistant-name').addEventListener('click', startHeaderRename);
 
     document.getElementById('detail-close-btn').addEventListener('click', closeDetail);
-    document.getElementById('detail-cancel-btn').addEventListener('click', cancelRunningSession);
     document.getElementById('detail-size-btn').addEventListener('click', cycleDrawerSize);
     document.getElementById('detail-minimize-btn').addEventListener('click', toggleDrawerMinimized);
     // A minimized drawer is mostly header, so let the header itself restore it.
@@ -2430,35 +2636,30 @@
     });
     wireDrawerResize();
 
-    const detailInput = document.querySelector('#detail-drawer .detail-send-input');
-    const detailSendBtn = document.querySelector('#detail-drawer .detail-send-btn');
-    detailSendBtn.addEventListener('click', () => {
-      sendDetailMessage(detailInput.value);
-      detailInput.value = '';
-      closeSlashPopup();
-    });
-    detailInput.addEventListener('keydown', (e) => {
-      if (slashState.open) {
-        if (e.key === 'ArrowDown') { e.preventDefault(); moveSlashActive(1); return; }
-        if (e.key === 'ArrowUp') { e.preventDefault(); moveSlashActive(-1); return; }
-        if ((e.key === 'Enter' || e.key === 'Tab') && slashState.items.length > 0) {
-          e.preventDefault();
-          applySlashSelection(slashState.activeIndex);
-          return;
-        }
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          closeSlashPopup();
-          return;
-        }
-      }
-      if (e.key === 'Enter') detailSendBtn.click();
-    });
-    detailInput.addEventListener('input', handleDetailInputForSlash);
-    detailInput.addEventListener('click', handleDetailInputForSlash);
-    detailInput.addEventListener('blur', () => closeSlashPopup());
+    const detailInput = composerInput(COMPOSERS.detail);
+    const detailSendBtn = document.getElementById('detail-send-btn');
 
-    document.getElementById('detail-attach-btn').addEventListener('click', browseForFile);
+    // Enter never stops a session — a keystroke that far from the user's intent
+    // shouldn't be able to kill a run. Stop is the button, deliberately clicked.
+    function sendFromDetailComposer() {
+      if (detailSendBtn.dataset.mode === 'stop') {
+        showToast('That agent is still working — stop it, or wait for it to finish.');
+        return;
+      }
+      sendDetailMessage(detailInput.value);
+      clearComposer(detailInput);
+      closeSlashPopup();
+    }
+    detailSendBtn.addEventListener('click', () => {
+      if (detailSendBtn.dataset.mode === 'stop') { cancelRunningSession(); return; }
+      sendFromDetailComposer();
+    });
+    wireComposer(COMPOSERS.detail, sendFromDetailComposer);
+
+    document.getElementById('detail-attach-btn')
+      .addEventListener('click', () => browseForFile(COMPOSERS.detail));
+    document.getElementById('detail-slash-btn')
+      .addEventListener('click', () => openSlashFromButton(COMPOSERS.detail));
     document.getElementById('detail-mcp-btn').addEventListener('click', () => {
       const panel = document.getElementById('mcp-panel');
       if (panel && !panel.hidden) { closeMcpPanel(); return; }

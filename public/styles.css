@@ -13,6 +13,11 @@
   --accent: #d97757;
   --accent-ink: #100d0a;
   --accent-soft: rgba(217,119,87,0.12);
+  /* Container-independent hover wash. The ghost controls in .composer sit on
+     several different surfaces, so a hover that names a surface token would
+     have to brighten in dark and darken in light — this stays correct on any
+     background in either theme. */
+  --hover: rgba(255,255,255,0.055);
   --ok: #7fae6f;
   --warn: #d9a857;
   --shadow: none;
@@ -30,6 +35,7 @@
   --accent: #bf5e39;
   --accent-ink: #fbf5ee;
   --accent-soft: rgba(191,94,57,0.10);
+  --hover: rgba(0,0,0,0.045);
   --ok: #4f8a43;
   --warn: #a97a1d;
 }
@@ -228,29 +234,33 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 /* ---------- command-bar directory chip ----------
    The target directory used to be passive hint text, so it was easy to fire an
    agent into the wrong repo without noticing. This makes it a real control. */
-.dir-chip-wrap { position: relative; flex-shrink: 0; }
+.dir-chip-wrap { position: relative; flex-shrink: 1; min-width: 0; }
 .dir-chip {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 200px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-2);
+  max-width: 190px;
+  padding: 6px 7px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
   color: var(--text-muted);
-  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1;
   cursor: pointer;
-  font-family: inherit;
 }
-.dir-chip:hover { border-color: var(--accent); color: var(--text); }
+.dir-chip:hover { background: var(--hover); color: var(--text); }
 .dir-chip-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.dir-chip-caret { color: var(--text-faint); font-size: 9px; }
-.dir-chip--empty { border-color: var(--accent); color: var(--accent); }
+.dir-chip-caret { color: var(--text-faint); font-size: 8px; }
+/* No directory chosen is the one rail state worth shouting about — sending
+   without one is the difference between starting an agent and a toast. */
+.dir-chip--empty { color: var(--accent); }
+.dir-chip--empty .dir-chip-caret { color: var(--accent); }
 .dropdown-header {
   padding: 11px 14px 9px;
   border-bottom: 1px solid var(--border-soft);
@@ -404,40 +414,6 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 }
 .command-bar-hint-text {
   color: var(--text-muted);
-}
-.command-input-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-}
-.command-input {
-  flex: 1;
-  min-width: 160px;
-  font-size: 13.5px;
-  color: var(--text);
-  background: transparent;
-  border: none;
-  outline: none;
-  font-family: 'JetBrains Mono', monospace;
-}
-.command-input::placeholder {
-  color: var(--text-faint);
-}
-.command-send-btn {
-  padding: 7px 16px;
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  border: none;
 }
 .command-pills {
   display: flex;
@@ -823,18 +799,6 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   gap: 7px;
   margin-bottom: 5px;
 }
-.detail-cancel-btn {
-  padding: 2px 8px;
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--warn);
-  font-size: 10.5px;
-  font-family: 'JetBrains Mono', monospace;
-  cursor: pointer;
-}
-.detail-cancel-btn:hover { border-color: var(--warn) !important; color: var(--warn) !important; background: var(--accent-soft); }
-.detail-cancel-btn[hidden] { display: none; }
 .detail-title {
   font-size: 14.5px;
   font-weight: 600;
@@ -846,10 +810,13 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   margin-top: 4px;
 }
 .drawer-close {
+  border: none;
+  background: none;
   cursor: pointer;
   color: var(--text-faint);
   font-size: 15px;
-  padding: 2px 6px;
+  line-height: 1;
+  padding: 3px 6px;
   border-radius: 4px;
 }
 .drawer-body {
@@ -876,6 +843,9 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   flex-shrink: 0;
 }
 .drawer-ctl {
+  border: none;
+  background: none;
+  font-family: inherit;
   cursor: pointer;
   color: var(--text-faint);
   font-size: 13px;
@@ -899,7 +869,6 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 
 .drawer--min { align-self: flex-start; width: 360px; }
 .drawer--min .drawer-body,
-.drawer--min .chat-working,
 .drawer--min .drawer-footer { display: none; }
 .drawer--min .drawer-header { border-bottom: none; }
 .drawer--min .detail-title {
@@ -967,58 +936,209 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 }
 .drawer-footer {
   position: relative;
-  padding: 13px 15px;
+  padding: 12px 15px 14px;
   border-top: 1px solid var(--border-soft);
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.drawer-footer-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-.drawer-footer-send-row {
-  display: flex;
-  gap: 8px;
-}
-.detail-attach-btn {
-  font-family: 'JetBrains Mono', monospace;
-  font-weight: 600;
-}
 
-/* ---------- Model / permission-mode selectors ----------
-   Shared by the command bar (new session) and the drawer footer (follow-up
-   message), both persisted to localStorage so the choice survives reopening
-   a session. bypassPermissions is meaningfully more dangerous than the other
-   modes, so an armed non-default permission gets an accent/warn treatment
-   the user can't miss at a glance. */
-.control-select {
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--surface-2);
+/* ---------- Composer ----------
+   Used by both prompt surfaces: the command bar (new session) and the drawer
+   footer (follow-up message). One bordered container holds a growing textarea
+   above a rail of controls.
+
+   The rail's controls are deliberately borderless and transparent, revealing a
+   background only on hover. The previous layout gave each control its own
+   border, which put five competing boxes in a 360px drawer — and at that width
+   the two selects mathematically could not fit on one row with the buttons, so
+   the row always wrapped. One container, ghost contents, no wrap. */
+.composer {
+  position: relative;
   border: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 11px;
-  font-family: 'JetBrains Mono', monospace;
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 9px 9px 7px;
+  transition: border-color .15s ease;
+}
+.composer:focus-within { border-color: var(--text-faint); }
+.composer-input {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
   outline: none;
-  max-width: 140px;
+  resize: none;
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 3px 5px 7px;
+  /* Height is set inline by autoGrowComposer() in app.js; this caps the growth
+     and hands the overflow to a scrollbar instead of eating the viewport. */
+  max-height: 220px;
+  overflow-y: auto;
+}
+.composer-input::placeholder { color: var(--text-faint); }
+.composer-rail {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  min-height: 26px;
+}
+.composer-rail-spacer { flex: 1; min-width: 6px; }
+
+.composer-btn,
+.composer-chip {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 6px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  outline: none;
   flex-shrink: 0;
 }
-.control-select:hover { border-color: var(--text-faint); color: var(--text); }
-.control-select--armed {
-  border-color: var(--warn);
-  color: var(--warn);
-  background: var(--accent-soft);
-  font-weight: 600;
+.composer-btn:hover,
+.composer-chip:hover { background: var(--hover); color: var(--text); }
+
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 400;
 }
+.composer-chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex-shrink: 0;
+}
+.composer-chip-dot--ok { background: var(--ok); }
+.composer-chip-dot--warn { background: var(--warn); }
+
+/* ---------- Model / permission-mode selectors ----------
+   Both persisted to localStorage so the choice survives reopening a session.
+   bypassPermissions is meaningfully more dangerous than the other modes, so an
+   armed non-default permission gets a warn treatment the user can't miss.
+
+   The caret lives on the wrapper because a <select> can't carry a pseudo-
+   element, and appearance:none is what removes the native OS caret box — the
+   only place platform chrome was still leaking into an otherwise flat UI. */
+.composer-select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 5px;
+  min-width: 0;
+}
+.composer-select-wrap:hover { background: var(--hover); }
+.composer-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 6px 16px 6px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  outline: none;
+  max-width: 118px;
+  /* A resolved "Default (…)" label can be arbitrarily long — it's built at
+     runtime from whatever permission mode the user's own settings.json
+     names (see loadClaudeDefaultsLabel in app.js). A native <select> can't
+     wrap, so without this an over-length label hard-clips mid-word instead
+     of degrading to an ellipsis. */
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  text-transform: lowercase;
+}
+/* Lowercase is the rail's voice, not the menu's — "bypass permissions" reads
+   fine inline but the native option list should stay in its authored case. */
+.composer-select option { text-transform: none; }
+.composer-select-wrap:hover .composer-select { color: var(--text); }
+.composer-caret {
+  position: absolute;
+  right: 6px;
+  font-size: 8px;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.composer-select-wrap--armed { background: var(--accent-soft); }
+.composer-select-wrap--armed .composer-select,
+.composer-select-wrap--armed:hover .composer-select { color: var(--warn); font-weight: 600; }
+.composer-select-wrap--armed .composer-caret { color: var(--warn); }
+
+/* Model and permission only apply to the *next* message, and a session already
+   in flight can't take one — so while it runs they step aside for the status. */
+.composer--running .composer-select-wrap,
+.composer--running .composer-chip,
+.composer--running .dir-chip-wrap { display: none; }
+
+.composer-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer-status[hidden] { display: none; }
+.composer-status-dot { background: var(--accent); }
+
+.composer-send {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: opacity .15s ease, background .15s ease, color .15s ease;
+}
+.composer-send:hover { opacity: 0.85; }
+.composer-send:disabled {
+  background: transparent;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  cursor: default;
+  opacity: 1;
+}
+/* Running: the same control becomes Stop in place, so the button under the
+   user's cursor is always the one they want next. */
+.composer-send--stop {
+  background: transparent;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 8px;
+}
+.composer-send--stop:hover { background: var(--accent-soft); opacity: 1; }
 
 /* ---------- Slash-command autocomplete ---------- */
 .slash-popup {
   position: absolute;
-  left: 15px;
-  right: 15px;
+  left: 0;
+  right: 0;
   bottom: 100%;
   margin-bottom: 6px;
   max-height: 220px;
@@ -1130,33 +1250,6 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .mcp-status-badge--pending { color: var(--text-faint); }
 .mcp-status-badge--error,
 .mcp-status-badge--unknown { color: var(--accent); border-color: var(--accent); }
-
-.detail-send-input {
-  flex: 1;
-  padding: 9px 12px;
-  border-radius: 6px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
-  font-family: 'JetBrains Mono', monospace;
-}
-.detail-send-input::placeholder {
-  color: var(--text-faint);
-}
-.detail-send-btn {
-  padding: 9px 14px;
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  border: none;
-  cursor: pointer;
-}
 
 /* ---------- Memory panel ---------- */
 
@@ -1764,13 +1857,3 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   padding: 0;
   white-space: pre;
 }
-.chat-working {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 16px;
-  border-top: 1px solid var(--border-soft);
-  font-size: 11.5px;
-  color: var(--text-muted);
-}
-.chat-working[hidden] { display: none; }

@@ -116,45 +116,67 @@
             <div class="mono command-caret" style="color:var(--accent); font-size:14px;">▍</div>
             <div class="eyebrow command-bar-hint-text">issue a command — I'll route it to an agent, in the directory you choose</div>
           </div>
-          <div class="command-input-row">
-            <div class="dir-chip-wrap">
-              <button class="dir-chip" id="command-dir-chip" type="button" title="Choose which directory the agent runs in">
-                <span class="status-dot dir-status-dot"></span>
-                <span class="mono dir-chip-name" id="command-dir-chip-name">no directory</span>
-                <span class="dir-chip-caret">▾</span>
-              </button>
+          <!-- Composer: one bordered container holding a growing textarea over a
+               control rail. Structurally identical to the drawer's composer so the
+               two prompt surfaces can't drift; see .composer in styles.css. -->
+          <div class="composer" id="command-composer">
+            <div class="slash-popup" id="command-slash-popup" hidden></div>
+            <textarea class="mono composer-input" id="command-input" rows="1"
+                      placeholder="research the billing webhook failures and propose a fix"></textarea>
+            <div class="composer-rail">
+              <div class="dir-chip-wrap">
+                <button class="dir-chip" id="command-dir-chip" type="button" title="Choose which directory the agent runs in">
+                  <span class="status-dot dir-status-dot"></span>
+                  <span class="mono dir-chip-name" id="command-dir-chip-name">no directory</span>
+                  <span class="dir-chip-caret" aria-hidden="true">▾</span>
+                </button>
 
-              <div class="dropdown-menu dropdown-menu--chip" id="command-dir-menu" hidden>
-                <div class="dropdown-header">
-                  <div class="eyebrow">Run agent in…</div>
-                </div>
-                <div class="dropdown-body">
-                  <div class="eyebrow dropdown-section-label">Recent directories</div>
-                  <div id="command-recent-directories-list"></div>
-                  <div class="menu-divider"></div>
-                  <div class="menu-item menu-item--browse" id="command-browse-directory-btn">
-                    <span class="icon">＋</span>
-                    <div class="label">Browse for a different directory…</div>
+                <div class="dropdown-menu dropdown-menu--chip" id="command-dir-menu" hidden>
+                  <div class="dropdown-header">
+                    <div class="eyebrow">Run agent in…</div>
+                  </div>
+                  <div class="dropdown-body">
+                    <div class="eyebrow dropdown-section-label">Recent directories</div>
+                    <div id="command-recent-directories-list"></div>
+                    <div class="menu-divider"></div>
+                    <div class="menu-item menu-item--browse" id="command-browse-directory-btn">
+                      <span class="icon">＋</span>
+                      <div class="label">Browse for a different directory…</div>
+                    </div>
                   </div>
                 </div>
               </div>
+              <button type="button" class="composer-btn" id="command-attach-btn" title="Insert a file path" aria-label="Insert a file path">@</button>
+              <button type="button" class="composer-btn" id="command-slash-btn" title="Run a slash command" aria-label="Run a slash command">/</button>
+              <span class="composer-select-wrap">
+                <select class="composer-select" id="command-model-select" title="Model — Default leaves this unset, so Claude Code uses whatever model your CLI is normally configured to use">
+                  <option value="">Default</option>
+                  <option value="claude-opus-4-8">Opus</option>
+                  <option value="claude-sonnet-5">Sonnet</option>
+                  <option value="claude-haiku-4-5-20251001">Haiku</option>
+                  <option value="claude-fable-5">Fable</option>
+                </select>
+                <span class="composer-caret" aria-hidden="true">▾</span>
+              </span>
+              <span class="composer-select-wrap">
+                <select class="composer-select" id="command-permission-select" title="Permission mode — Default leaves this unset, so Claude Code uses its normal permission behavior (asks before risky actions)">
+                  <option value="">Default</option>
+                  <option value="plan">Plan</option>
+                  <option value="acceptEdits">Accept Edits</option>
+                  <option value="bypassPermissions">Bypass Permissions</option>
+                  <option value="manual">Manual</option>
+                </select>
+                <span class="composer-caret" aria-hidden="true">▾</span>
+              </span>
+              <!-- POST /api/sessions blocks until the agent finishes, so this
+                   can be on screen for minutes. -->
+              <span class="composer-status" id="command-composer-status" hidden>
+                <span class="status-dot status-dot--pulse-fast composer-status-dot"></span>
+                <span id="command-composer-status-text">starting…</span>
+              </span>
+              <span class="composer-rail-spacer"></span>
+              <button type="button" class="composer-send" id="command-send-btn" title="Start a session (Enter)" aria-label="Start a session">↑</button>
             </div>
-            <input class="mono command-input" id="command-input" placeholder="research the billing webhook failures and propose a fix">
-            <select class="control-select" id="command-model-select" title="Model — Default leaves this unset, so Claude Code uses whatever model your CLI is normally configured to use">
-              <option value="">Default</option>
-              <option value="claude-opus-4-8">Opus</option>
-              <option value="claude-sonnet-5">Sonnet</option>
-              <option value="claude-haiku-4-5-20251001">Haiku</option>
-              <option value="claude-fable-5">Fable</option>
-            </select>
-            <select class="control-select" id="command-permission-select" title="Permission mode — Default leaves this unset, so Claude Code uses its normal permission behavior (asks before risky actions)">
-              <option value="">Default</option>
-              <option value="plan">Plan</option>
-              <option value="acceptEdits">Accept Edits</option>
-              <option value="bypassPermissions">Bypass Permissions</option>
-              <option value="manual">Manual</option>
-            </select>
-            <button class="btn dotnum command-send-btn" id="command-send-btn">Send</button>
           </div>
           <div class="command-pills">
             <div class="pill">Research</div>
@@ -235,55 +257,67 @@
             <div class="drawer-status-row">
               <div class="status-dot" id="detail-status-dot"></div>
               <div class="eyebrow" id="detail-status-label"></div>
-              <button type="button" class="ghost detail-cancel-btn" id="detail-cancel-btn" title="Cancel this running session" hidden>Stop</button>
             </div>
             <div class="detail-title" id="detail-title"></div>
             <div class="mono detail-meta" id="detail-meta"></div>
           </div>
           <div class="drawer-controls">
-            <div class="ghost drawer-ctl" id="detail-minimize-btn" title="Minimize">—</div>
-            <div class="ghost drawer-ctl" id="detail-size-btn" title="Widen the panel">⤢</div>
-            <div class="ghost drawer-close" id="detail-close-btn" title="Close">×</div>
+            <button type="button" class="ghost drawer-ctl" id="detail-minimize-btn" title="Minimize" aria-label="Minimize">—</button>
+            <button type="button" class="ghost drawer-ctl" id="detail-size-btn" title="Widen the panel" aria-label="Widen the panel">⤢</button>
+            <button type="button" class="ghost drawer-close" id="detail-close-btn" title="Close" aria-label="Close">×</button>
           </div>
         </div>
 
         <div class="drawer-body chat-body" id="chat-history"></div>
 
-        <div class="mono chat-working" id="chat-working" hidden>
-          <span class="orb orb--dot orb--active"></span>
-          <span id="chat-working-text">working…</span>
-        </div>
-
         <div class="drawer-footer">
-          <div class="slash-popup" id="slash-popup" hidden></div>
-          <div class="drawer-footer-controls">
-            <select class="control-select" id="detail-model-select" title="Model — Default leaves this unset, so Claude Code uses whatever model your CLI is normally configured to use">
-              <option value="">Default</option>
-              <option value="claude-opus-4-8">Opus</option>
-              <option value="claude-sonnet-5">Sonnet</option>
-              <option value="claude-haiku-4-5-20251001">Haiku</option>
-              <option value="claude-fable-5">Fable</option>
-            </select>
-            <select class="control-select" id="detail-permission-select" title="Permission mode — Default leaves this unset, so Claude Code uses its normal permission behavior (asks before risky actions)">
-              <option value="">Default</option>
-              <option value="plan">Plan</option>
-              <option value="acceptEdits">Accept Edits</option>
-              <option value="bypassPermissions">Bypass Permissions</option>
-              <option value="manual">Manual</option>
-            </select>
-            <button type="button" class="ghost drawer-ctl detail-attach-btn" id="detail-attach-btn" title="Insert a file path">@</button>
-            <button type="button" class="ghost drawer-ctl detail-mcp-btn" id="detail-mcp-btn" title="Check MCP server status for this project">MCP</button>
-          </div>
           <div class="mcp-panel" id="mcp-panel" hidden>
             <div class="mcp-panel-header">
               <span class="eyebrow">MCP Servers</span>
-              <button type="button" class="ghost drawer-ctl mcp-panel-close" id="mcp-panel-close" title="Close">×</button>
+              <button type="button" class="ghost drawer-ctl mcp-panel-close" id="mcp-panel-close" title="Close" aria-label="Close">×</button>
             </div>
             <div class="mcp-panel-body" id="mcp-panel-body"></div>
           </div>
-          <div class="drawer-footer-send-row">
-            <input class="mono detail-send-input" id="detail-send-input" placeholder="Send an instruction to this agent… (/ for commands)">
-            <button class="btn dotnum detail-send-btn" id="detail-send-btn">Send</button>
+
+          <div class="composer" id="detail-composer">
+            <div class="slash-popup" id="slash-popup" hidden></div>
+            <textarea class="mono composer-input" id="detail-send-input" rows="1"
+                      placeholder="Send an instruction to this agent…"></textarea>
+            <div class="composer-rail">
+              <button type="button" class="composer-btn" id="detail-attach-btn" title="Insert a file path" aria-label="Insert a file path">@</button>
+              <button type="button" class="composer-btn" id="detail-slash-btn" title="Run a slash command" aria-label="Run a slash command">/</button>
+              <span class="composer-select-wrap">
+                <select class="composer-select" id="detail-model-select" title="Model — Default leaves this unset, so Claude Code uses whatever model your CLI is normally configured to use">
+                  <option value="">Default</option>
+                  <option value="claude-opus-4-8">Opus</option>
+                  <option value="claude-sonnet-5">Sonnet</option>
+                  <option value="claude-haiku-4-5-20251001">Haiku</option>
+                  <option value="claude-fable-5">Fable</option>
+                </select>
+                <span class="composer-caret" aria-hidden="true">▾</span>
+              </span>
+              <span class="composer-select-wrap">
+                <select class="composer-select" id="detail-permission-select" title="Permission mode — Default leaves this unset, so Claude Code uses its normal permission behavior (asks before risky actions)">
+                  <option value="">Default</option>
+                  <option value="plan">Plan</option>
+                  <option value="acceptEdits">Accept Edits</option>
+                  <option value="bypassPermissions">Bypass Permissions</option>
+                  <option value="manual">Manual</option>
+                </select>
+                <span class="composer-caret" aria-hidden="true">▾</span>
+              </span>
+              <button type="button" class="composer-chip" id="detail-mcp-btn" title="Check MCP server status for this project">
+                <span class="composer-chip-dot" id="detail-mcp-dot"></span><span id="detail-mcp-label">mcp</span>
+              </button>
+              <!-- Replaces the selects while the agent runs: the status the user
+                   is waiting on, in the place they're already looking. -->
+              <span class="composer-status" id="detail-composer-status" hidden>
+                <span class="status-dot status-dot--pulse-fast composer-status-dot"></span>
+                <span id="detail-composer-status-text">working…</span>
+              </span>
+              <span class="composer-rail-spacer"></span>
+              <button type="button" class="composer-send" id="detail-send-btn" title="Send (Enter)" aria-label="Send">↑</button>
+            </div>
           </div>
         </div>
       </div>
@@ -327,7 +361,7 @@
   <div class="modal">
     <div class="modal-header">
       <div class="eyebrow">Tracked projects</div>
-      <div class="ghost drawer-close" id="projects-modal-close">×</div>
+      <button type="button" class="ghost drawer-close" id="projects-modal-close" title="Close" aria-label="Close">×</button>
     </div>
     <div class="mono onboarding-sub modal-sub">Unchecked projects are hidden from the dashboard, never touched on disk.</div>
     <div class="project-picker-list" id="projects-modal-list"></div>
