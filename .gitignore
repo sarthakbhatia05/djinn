@@ -4,3 +4,9 @@ data/
 .superpowers/
 .claude/settings.local.json
 .claude/worktrees/
+
+# Working notes, mockups and design history stay local. They carry real
+# machine paths and account names, and they describe intent rather than
+# what shipped — the code and README are the record that goes to the remote.
+design/
+docs/

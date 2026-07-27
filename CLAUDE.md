@@ -4,7 +4,9 @@ A local web app that gives one screen for managing Claude Code sessions across m
 
 The project is named **Djinn** (`package.json` → `djinn`); `README.md` is the outward-facing description. On first run the user names their own assistant, and that name — not "Claude" — is what the UI says. The `claude` CLI remains the engine; Djinn reads its transcripts and spawns it.
 
-Status: **working locally, MIT licensed, published to a private GitHub repo (`sarthakbhatia05/djinn`) on branch `master`.** See `docs/ROADMAP.md` for what's next.
+Status: **working locally, MIT licensed, published to a private GitHub repo (`sarthakbhatia05/djinn`) on branch `master`.**
+
+`design/` and `docs/` are deliberately gitignored — the roadmap, specs and mockups stay on this machine and are not in the repo, so don't go looking for them in a fresh clone and don't add them back. `docs/ROADMAP.md` is still the local record of what's next.
 
 ## Run it
 
