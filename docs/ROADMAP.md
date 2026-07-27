@@ -134,6 +134,9 @@ Carried forward from the previous revision; none are blocking.
    `ENOENT`) and used as a memory-store key. Check before dispatch and return
    a real error.
 
+   **Fixed 2026-07-27.** Two causes, both now closed — see the commit. The
+   write-up below is kept because the diagnosis is the useful part.
+
    **Worse symptom, reproduced 2026-07-27:** start a session in a directory
    that isn't in `~/.claude.json` and *the dashboard's own new session becomes
    permanently invisible in it.* `POST /api/sessions` succeeds, the transcript
@@ -146,9 +149,22 @@ Carried forward from the previous revision; none are blocking.
    forever. Three real sessions were created this way and none appeared.
 
    Note the trap: the obvious "fix" is to register the directory in
-   `~/.claude.json`, which we must never write. The fix belongs on our side —
-   either match on the encoded form too, or don't filter out sessions whose
-   project we ourselves just added.
+   `~/.claude.json`, which we must never write. The fix belonged on our side,
+   and turned out to be two separate defects stacked on each other:
+
+   1. `createSessionStore` resolved folder names against the CLI registry only.
+      It now also takes `extraProjectPaths`, wired to the tracked-projects
+      list, so a directory we were handed at session-creation time stays
+      resolvable even when the registry has never heard of it.
+   2. **`encodeProjectPath` never encoded `.`** — the larger bug, found only
+      because fix 1 still didn't work. Claude Code replaces dots with hyphens;
+      we didn't, so any path containing one produced a name that could never
+      match its folder. On a Windows account named `sarthak.bhatia.INTIMETEC`
+      that is *every project under the home directory*. Confirmed against the
+      real install: 0 of 100+ transcript folders contain a literal dot.
+
+   After both: the 3 previously-invisible sessions resolve, and
+   `pathResolved: false` no longer occurs anywhere in the list.
 5. **WebSocket reconnect has no backoff or cap** — a down server produces a
    3s reconnect loop forever.
 6. **Per-request `statSync` cost** — ~162 syscalls per `/api/sessions`;

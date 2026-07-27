@@ -466,3 +466,54 @@ test('listSessions survives a project folder deleted mid-scan (readdir race)', (
     fs.readdirSync = realReaddirSync;
   }
 });
+
+// Regression: a session started in a directory that ~/.claude.json has never
+// heard of used to resolve to nothing. It reported pathResolved:false, which
+// meant the tracked-projects filter in routes/sessions.js compared the encoded
+// folder name against an absolute path, never matched, and dropped the session
+// from the dashboard permanently — including sessions the dashboard had just
+// created itself and explicitly added to the tracked list.
+test('listSessions resolves a project the registry does not know from extraProjectPaths', () => {
+  const { claudeHomeDir, registryPath } = makeFixture();
+  // An empty registry is the worst case: no key can possibly match.
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  const withoutExtra = createSessionStore({ claudeHomeDir, registryPath }).listSessions();
+  assert.strictEqual(withoutExtra[0].pathResolved, false);
+  assert.strictEqual(withoutExtra[0].projectPath, 'D--Projects-acme-acme-web');
+
+  const store = createSessionStore({
+    claudeHomeDir,
+    registryPath,
+    extraProjectPaths: () => ['D:/Projects/acme/acme-web'],
+  });
+  const sessions = store.listSessions();
+  assert.strictEqual(sessions.length, 1);
+  assert.strictEqual(sessions[0].pathResolved, true);
+  assert.strictEqual(sessions[0].projectPath, 'D:/Projects/acme/acme-web');
+  // A real path also means the name stops being the encoded folder string.
+  assert.strictEqual(sessions[0].projectName, 'acme-web');
+});
+
+test('listSessions prefers the registry spelling over a tracked-projects one', () => {
+  const { claudeHomeDir, registryPath } = makeFixture();
+  const store = createSessionStore({
+    claudeHomeDir,
+    registryPath,
+    extraProjectPaths: () => ['d:\\projects\\acme\\acme-web'],
+  });
+  assert.strictEqual(store.listSessions()[0].projectPath, 'D:/Projects/acme/acme-web');
+});
+
+test('listSessions survives extraProjectPaths throwing', () => {
+  const { claudeHomeDir, registryPath } = makeFixture();
+  const store = createSessionStore({
+    claudeHomeDir,
+    registryPath,
+    extraProjectPaths: () => { throw new Error('settings.json is corrupt'); },
+  });
+  const sessions = store.listSessions();
+  // Degrades to registry-only resolution rather than taking the list down.
+  assert.strictEqual(sessions.length, 1);
+  assert.strictEqual(sessions[0].projectPath, 'D:/Projects/acme/acme-web');
+});

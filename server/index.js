@@ -28,7 +28,6 @@ function broadcast(message) {
   }
 }
 
-const sessionStore = createSessionStore();
 const claudeCli = createClaudeCli({
   onStatusChange: (sessionId, status) => broadcast({ type: 'session-status', sessionId, status }),
 });
@@ -39,6 +38,11 @@ const memoryStore = createMemoryStore({
 });
 const recentDirectories = createRecentDirectories({ filePath: path.join(dataDir, 'recent-directories.json') });
 const settingsStore = createSettingsStore({ filePath: path.join(dataDir, 'settings.json') });
+// Constructed after settingsStore so it can resolve encoded project folders
+// against the tracked-projects list when ~/.claude.json doesn't know them.
+const sessionStore = createSessionStore({
+  extraProjectPaths: () => settingsStore.get().projects,
+});
 const folderPicker = { pickFolder };
 const filePicker = { pickFile };
 const slashCommands = { listSlashCommands };

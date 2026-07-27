@@ -44,7 +44,11 @@ Browser (public/)  <-- HTTP + WebSocket -->  Local server (server/)
 
 ## Domain gotchas (each cost real debugging time)
 
-**Session transcript paths.** Claude Code stores transcripts at `~/.claude/projects/<encoded-path>/<session-id>.jsonl`, where the encoding replaces `:`, `\`, `/`, and space with `-`. Registry keys in `~/.claude.json` vary in case and slash direction for the same project, so resolution matches case-insensitively.
+**Session transcript paths.** Claude Code stores transcripts at `~/.claude/projects/<encoded-path>/<session-id>.jsonl`, where the encoding replaces `:`, `\`, `/`, space **and `.`** with `-`. Registry keys in `~/.claude.json` vary in case and slash direction for the same project, so resolution matches case-insensitively.
+
+The dot is the one that bites. This file used to omit it, and so did `encodeProjectPath` — which silently broke every project under the home directory of a Windows account whose username contains a dot (`C:\Users\jane.doe\…`). The encoded name never matched the real folder, so the project resolved to nothing, reported `pathResolved: false`, and its sessions were filtered out of the dashboard entirely. If you are ever unsure whether a character is encoded, check the folder names on disk: none of them should contain that character literally.
+
+**Resolution has two sources, not one.** `~/.claude.json` is the CLI's own registry and only lists projects the CLI knows about — a directory the dashboard itself started a session in may never appear there. `createSessionStore` therefore also takes `extraProjectPaths`, wired in `server/index.js` to the tracked-projects list, so a session we created is resolvable even when the registry has never heard of the folder. Without that second source those sessions are invisible in the dashboard *and* un-continuable.
 
 **Session titles are ~15KB deep, not at the top.** Real user messages have `isMeta: undefined` (not `false` — checking `=== false` matches nothing and yields zero titles). The first several `type:"user"` lines are wrapper artifacts (`<local-command-caveat>`, `<command-name>`, `<system-reminder>`) and tool-result arrays, all of which must be skipped. `READ_HEAD_BYTES` is 64KB because measured real-prompt offsets across 162 transcripts were p50 10.5KB / p99 25.2KB / max 52.9KB; 8KB resolved 12/162, 64KB resolves ~145/162, and larger budgets gain nothing. Head parses are cached by mtime+size (~10x faster on repeat requests).
 

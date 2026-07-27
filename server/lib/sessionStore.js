@@ -133,6 +133,15 @@ function deriveProjectName(projectPath, projectFolder) {
 function createSessionStore({
   claudeHomeDir = path.join(os.homedir(), '.claude', 'projects'),
   registryPath = path.join(os.homedir(), '.claude.json'),
+  // A second source of absolute project paths to resolve encoded folder names
+  // against. ~/.claude.json is the CLI's own registry and lists only projects
+  // the CLI itself knows about — a directory this dashboard started a session
+  // in may never appear there. With the registry as the only source those
+  // sessions resolve to nothing: they report pathResolved:false, get filtered
+  // out of the tracked-projects view entirely, and can't be continued, even
+  // though we were handed their real absolute path when the session was
+  // created. Wired to the tracked-projects list in server/index.js.
+  extraProjectPaths = () => [],
 } = {}) {
   function loadRegistryKeys() {
     // ~/.claude.json is written live by the Claude Code CLI; a mid-write /
@@ -147,6 +156,20 @@ function createSessionStore({
     }
   }
 
+  // Registry first: those keys come from the CLI itself and are the more
+  // authoritative spelling of a path. Tracked projects only fill the gaps.
+  function candidateProjectPaths() {
+    let extra;
+    try {
+      extra = extraProjectPaths() || [];
+    } catch {
+      // A malformed settings file must not take the whole session list down;
+      // degrade to registry-only resolution, exactly as before this existed.
+      extra = [];
+    }
+    return loadRegistryKeys().concat(extra);
+  }
+
   function resolveProjectPath(projectFolder, registryKeys) {
     for (const key of registryKeys) {
       if (encodeProjectPath(key).toLowerCase() === projectFolder.toLowerCase()) {
@@ -158,7 +181,7 @@ function createSessionStore({
 
   function listSessions() {
     if (!fs.existsSync(claudeHomeDir)) return [];
-    const registryKeys = loadRegistryKeys();
+    const registryKeys = candidateProjectPaths();
     const folders = fs.readdirSync(claudeHomeDir, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
