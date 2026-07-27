@@ -1,6 +1,8 @@
 # Roadmap & Follow-ups
 
-Current state: **205 tests passing, working locally, not pushed to any remote.**
+Current state: **210 tests passing, working locally, still no git remote.** The
+composer redesign, the project-path resolution fixes and the command pills sit
+on branch `composer-redesign` (4 commits), not merged to `master`.
 
 Since the last revision of this file, most of the original blockers closed:
 cross-platform folder picker, README, unified route error handling, theme
@@ -9,6 +11,11 @@ field whitelisting, MCP status, slash commands, and the `@` file picker all
 shipped. What follows is what's actually left.
 
 Ordering within each section is roughly highest-value first.
+
+**Keeping this file honest.** Every revision so far has drifted — this one
+found two section 5 items that were fixed in code but still listed as open,
+plus a claim written the same day that was already wrong. Before editing,
+verify each item you touch against the code rather than against this file.
 
 ---
 
@@ -104,10 +111,11 @@ Every session starts and continues here, so friction compounds.
   drawer/modal controls (`#detail-minimize-btn`, `#detail-size-btn`,
   `#detail-close-btn`, `#projects-modal-close`) are real buttons with
   `aria-label`s, which is what let the `.drawer-ctl` UA-chrome reset stop
-  being an apology and become ordinary button styling. Still `<div>`s:
-  `#new-session-btn`, `#projects-btn`, the theme toggle, and every `.pill`,
-  `.row`, and `.menu-item`. None are keyboard-focusable or announced, and
-  `aria-` coverage outside the composer is still zero.
+  being an apology and become ordinary button styling. The four `.pill`s went
+  with them. Verified still `<div>`s: `#new-session-btn`, `#projects-btn`, the
+  theme toggle, and every `.row` (`app.js:540`) and `.menu-item`
+  (`app.js:1959`). None are keyboard-focusable or announced, and `aria-`
+  coverage outside the composer and those controls is still zero.
 
 - **No favicon.** `index.html` declares none, so the browser tab shows the
   blank-page icon. Trivial, and this is an app that lives in a pinned tab.
@@ -118,15 +126,20 @@ Every session starts and continues here, so friction compounds.
 
 Carried forward from the previous revision; none are blocking.
 
-1. **`sessionStore` concurrent-deletion race** — `readdirSync` on a project
-   folder deleted mid-scan throws and aborts the entire session list. Wrap
-   the inner loop in try/catch and skip that folder.
+1. ~~**`sessionStore` concurrent-deletion race.**~~ **Already fixed** — the
+   inner loop is wrapped and skips the folder (`sessionStore.js`, the
+   `catch { continue; }` blocks), with a ghost-folder test covering it. This
+   entry was stale; verified 2026-07-27.
 2. **`claudeCli` concurrent same-id sends** — two `sendMessage` calls for one
    session share a single running-map entry; the first to finish fires `idle`
-   and flips `isRunning` false while the second is still running. Matters
-   more now that `isRunning` is load-bearing for the UI.
-3. **Stop forwarding `err.message` verbatim** in 502 bodies
-   (`routes/sessions.js`).
+   and flips `isRunning` false while the second is still running.
+   **Still open at the server level.** The composer now refuses to send to a
+   running session, so the UI no longer *walks* into it — but that is a client
+   guard on one path, not a fix. A second browser tab, a direct `curl`, or the
+   queue feature in section 6 all still reach it.
+3. ~~**Stop forwarding `err.message` verbatim** in 502 bodies.~~ **Already
+   fixed** — `server/app.js:48` only passes `err.message` through for statuses
+   below 500. This entry was stale; verified 2026-07-27.
 4. **Guard unresolved projects.** When `pathResolved` is false, `projectPath`
    holds an encoded non-path that gets passed as `cwd` to `spawn` (raw
    `ENOENT`) and used as a memory-store key. Check before dispatch and return
@@ -176,6 +189,28 @@ Carried forward from the previous revision; none are blocking.
    across chunks could mis-decode; `client.OPEN` read off the instance rather
    than the `WebSocket` constant.
 
+9. **The error middleware never logs.** `server/app.js` correctly refuses to
+   leak `err.message` to the client on a 5xx — and then drops it entirely.
+   Nothing is written server-side, so a 500 gives you `{"error":"Internal
+   server error"}` in the browser and an empty terminal. Hit for real on
+   2026-07-27: a `POST /api/sessions` returned 500 in 0.4s and the only way to
+   see `spawn claude ENOENT` was to re-run `claudeCli.startSession` by hand in
+   a REPL. One `console.error(err)` in the handler fixes it. This is the
+   highest value-per-line item in this section.
+
+10. **Intermittent `spawn claude ENOENT` on session start.** Same day, the
+    first `POST /api/sessions` after a server start failed this way; every
+    identical request afterwards succeeded. `claude.exe` was on `PATH` and
+    `PATHEXT` was populated in both shells checked. Not diagnosed, not
+    reproduced since. Filed so the next occurrence isn't treated as new. Item
+    9 is a prerequisite for investigating it.
+
+11. **Slash popup can be closed by the wrong composer's blur.** `wireComposer`
+    binds `blur → closeSlashPopup()`, which closes whichever popup is open
+    rather than only its own. Hand-off *between* composers is handled
+    (`handleComposerSlash` closes the outgoing one), so the reachable case is
+    narrow, but the blur handler is still not context-aware.
+
 ---
 
 ## 6. Composer redesign — **shipped**
@@ -210,8 +245,13 @@ Landed in this pass:
   in light
 
 Deferred from the original spec: ambient per-session cost in the rail (needs
-the `285da7d` unrevert), and the send-glyph decision was resolved as the `↑`
-disc — matching the approved layout sketch.
+the `285da7d` unrevert).
+
+**Still undecided: the send glyph.** It ships as the `↑` disc because that is
+what the approved layout sketch showed, but that was a default taken to avoid
+blocking, not a decision anyone made. The alternative — a small letterspaced
+Silkscreen `SEND`, consistent with the old command-bar button — is a two-line
+swap in `.composer-send` and the `setDetailComposerRunning` glyph.
 
 ### Original diagnosis (kept for context)
 
@@ -329,3 +369,19 @@ Both need server work.
 
 1. Paste screenshots
 2. Queue, then cost
+
+---
+
+## 7. Housekeeping
+
+- **Three scratch transcripts left on disk from verification.** Created
+  2026-07-27 to test the composer's in-flight states, under
+  `~/.claude/projects/C--Users-...-scratchpad-djinn-verify/` (ids `0e59c994`,
+  `5720cb78`, `ce5858b9`). They were invisible until the section 5 item 4 fix
+  and are now *visible in the dashboard*, so they read as real sessions. The
+  path is also in the tracked-projects list and in recent directories. Safe to
+  delete all three plus the folder; nothing references them.
+
+- **Branch not merged.** `composer-redesign` is 4 commits ahead of `master`
+  and there is still no remote anywhere, so every commit in this repo exists
+  on exactly one disk.
