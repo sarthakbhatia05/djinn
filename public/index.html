@@ -178,11 +178,14 @@
               <button type="button" class="composer-send" id="command-send-btn" title="Start a session (Enter)" aria-label="Start a session">↑</button>
             </div>
           </div>
-          <div class="command-pills">
-            <div class="pill">Research</div>
-            <div class="pill">Fix a bug</div>
-            <div class="pill">Refactor</div>
-            <div class="pill">Ship a PR</div>
+          <!-- Starting scaffolds for the composer. "|" marks where the caret
+               lands. These hide as soon as the composer has content, which is
+               what lets a click replace the value without asking. -->
+          <div class="command-pills" id="command-pills">
+            <button type="button" class="pill" data-template="Research how | works in this repo, then summarise the key files and the flow between them.">Research</button>
+            <button type="button" class="pill" data-template="Fix this bug: |">Fix a bug</button>
+            <button type="button" class="pill" data-template="Refactor | — keep the behaviour identical and the tests passing.">Refactor</button>
+            <button type="button" class="pill" data-template="Implement |, then commit it on a new branch and open a PR.">Ship a PR</button>
           </div>
         </div>
 

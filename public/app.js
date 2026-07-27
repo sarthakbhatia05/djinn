@@ -1592,6 +1592,38 @@
     handleComposerSlash(ctx);
   }
 
+  // The four command pills were decorative for the whole of v1: `.pill` carries
+  // cursor:pointer and an accent hover, so they read as buttons, but no handler
+  // was ever bound and clicking one did nothing. They now fill the composer
+  // with a starting scaffold, and hide themselves the moment it has content —
+  // which is what lets a click replace the value outright without ever
+  // destroying something the user typed.
+  function updateCommandPillsVisibility() {
+    const wrap = document.getElementById('command-pills');
+    const input = composerInput(COMPOSERS.command);
+    if (wrap && input) wrap.hidden = input.value.trim().length > 0;
+  }
+
+  function wireCommandPills() {
+    const wrap = document.getElementById('command-pills');
+    const input = composerInput(COMPOSERS.command);
+    if (!wrap || !input) return;
+    for (const pill of wrap.querySelectorAll('.pill')) {
+      pill.addEventListener('click', () => {
+        const template = pill.dataset.template || '';
+        const caret = template.indexOf('|');
+        input.value = template.replace('|', '');
+        autoGrowComposer(input);
+        input.focus();
+        const pos = caret === -1 ? input.value.length : caret;
+        input.setSelectionRange(pos, pos);
+        updateCommandPillsVisibility();
+      });
+    }
+    input.addEventListener('input', updateCommandPillsVisibility);
+    updateCommandPillsVisibility();
+  }
+
   // Enter submits and Shift+Enter breaks the line — the convention every chat
   // client uses, and the whole reason both inputs are textareas now. While the
   // slash popup is open the arrow keys, Enter, Tab and Escape belong to it.
@@ -2017,6 +2049,7 @@
     }
     if (result === null) return;
     clearComposer(input);
+    updateCommandPillsVisibility(); // clearComposer fires no input event
     showToast(`${assistantName()} finished the run — session added.`, false);
     await Promise.all([loadSessions(), loadProjects(), loadRecentDirectories()]);
     // This browser just created that session — it shouldn't show as unseen.
@@ -2572,6 +2605,7 @@
       startNewSession(currentTargetDirectory());
     });
     wireComposer(COMPOSERS.command, () => startNewSession(currentTargetDirectory()));
+    wireCommandPills();
     document.getElementById('command-attach-btn')
       .addEventListener('click', () => browseForFile(COMPOSERS.command));
     document.getElementById('command-slash-btn')

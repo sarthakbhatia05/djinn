@@ -421,10 +421,15 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   margin-top: 12px;
   flex-wrap: wrap;
 }
+/* Needed because the display:flex above would otherwise beat the UA's
+   [hidden] rule and keep them on screen. */
+.command-pills[hidden] { display: none; }
 .pill {
   padding: 5px 13px;
   border-radius: 20px;
   border: 1px solid var(--border);
+  background: transparent;
+  font-family: inherit;
   font-size: 11.5px;
   color: var(--text-muted);
 }
