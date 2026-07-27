@@ -17,13 +17,11 @@ Ordering within each section is roughly highest-value first.
 These cost the most trust per line of code, because a user clicks them and
 nothing happens. Each is either a small wiring job or a deletion.
 
-- **The four command pills are unwired.** `Research / Fix a bug / Refactor /
-  Ship a PR` in `public/index.html` have no handler anywhere in `app.js`, but
-  `.pill` carries `cursor: pointer` and an accent hover in `styles.css`, so
-  they look like buttons. Verified at runtime: clicking one leaves
-  `#command-input` untouched. Either make them prompt templates that prefill
-  the command input, or delete them. This is the same failure the decorative
-  `⌘K` box used to be — that one got wired; these didn't.
+- ~~The four command pills are unwired.~~ **Shipped.** They fill the composer
+  with a starting scaffold and place the caret where you continue typing, then
+  hide themselves while the composer has content — which is what lets a click
+  replace the value without a confirm. Converted to `<button>` in the same
+  change.
 
 - **No "needs input" status.** `.card-status-label--needs-input` exists in CSS
   and nothing ever sets it. Status is binary running/idle, so a session
