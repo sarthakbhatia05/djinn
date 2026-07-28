@@ -177,6 +177,8 @@
     renderProjects();
     updateHeaderStats();
     populateMemoryProjectSelect();
+    populateBacklogFolderSelect();
+    renderBacklog(); // re-render so each row's repo <select> reflects the now-loaded project list
     updateCommandBarHint();
   }
 
@@ -585,24 +587,43 @@
         row.innerHTML = `
           <input type="checkbox" class="backlog-checkbox" />
           <div class="backlog-row-title"></div>
-          <div class="backlog-priority"></div>
-          <div class="mono backlog-row-project"></div>
+          <select class="backlog-priority" title="Priority"></select>
+          <select class="mono backlog-row-project" title="Repo"></select>
           <button type="button" class="backlog-assign-btn">Ship &rarr;</button>
           <button type="button" class="backlog-delete-btn" title="Remove from backlog">&times;</button>
         `;
         const checkbox = row.querySelector('.backlog-checkbox');
         checkbox.checked = !!item.done;
-        checkbox.addEventListener('change', (e) => toggleBacklogItem(item.id, e.target.checked));
+        checkbox.addEventListener('change', (e) => updateBacklogItemField(item.id, 'done', e.target.checked));
 
         const titleEl = row.querySelector('.backlog-row-title');
         titleEl.textContent = item.title;
         if (item.done) titleEl.style.textDecoration = 'line-through';
 
         const priorityEl = row.querySelector('.backlog-priority');
-        priorityEl.textContent = priority;
+        for (const p of ['low', 'medium', 'high']) {
+          const opt = document.createElement('option');
+          opt.value = p;
+          opt.textContent = p;
+          if (p === priority) opt.selected = true;
+          priorityEl.appendChild(opt);
+        }
         priorityEl.classList.add(`backlog-priority--${priority}`);
+        priorityEl.addEventListener('change', (e) => {
+          priorityEl.classList.remove('backlog-priority--low', 'backlog-priority--medium', 'backlog-priority--high');
+          priorityEl.classList.add(`backlog-priority--${e.target.value}`);
+          updateBacklogItemField(item.id, 'priority', e.target.value);
+        });
 
-        row.querySelector('.backlog-row-project').textContent = item.repoPath;
+        const projectEl = row.querySelector('.backlog-row-project');
+        for (const project of trackedProjects()) {
+          const opt = document.createElement('option');
+          opt.value = project.projectPath;
+          opt.textContent = project.projectName || project.projectFolder;
+          if (normalizeClientPath(project.projectPath) === normalizeClientPath(item.repoPath)) opt.selected = true;
+          projectEl.appendChild(opt);
+        }
+        projectEl.addEventListener('change', (e) => updateBacklogItemField(item.id, 'repoPath', e.target.value));
 
         const shipBtn = row.querySelector('.backlog-assign-btn');
         if (item.done) {
@@ -624,12 +645,12 @@
     if (countEl) countEl.textContent = `${queued} queued`;
   }
 
-  async function toggleBacklogItem(id, done) {
+  async function updateBacklogItemField(id, field, value) {
     const result = await guarded(
       fetchJson(`/api/backlog/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ done }),
+        body: JSON.stringify({ [field]: value }),
       }),
       'Failed to update backlog item'
     );
@@ -689,7 +710,7 @@
     await loadBacklog();
   }
 
-  async function addBacklogItem(title, repoPath) {
+  async function addBacklogItem(title, repoPath, priority) {
     if (!title || !title.trim()) {
       showToast('Type a task title before adding it to the backlog.');
       return;
@@ -702,12 +723,33 @@
       fetchJson('/api/backlog', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, repoPath }),
+        body: JSON.stringify({ title, repoPath, priority }),
       }),
       'Failed to add backlog item'
     );
     if (result === null) return;
     await loadBacklog();
+  }
+
+  // Mirrors populateMemoryProjectSelect — the add-row's repo picker needs the
+  // same tracked-project list, kept in sync whenever projects load.
+  function populateBacklogFolderSelect() {
+    const select = document.getElementById('backlog-folder-select');
+    if (!select) return;
+    const previous = select.value;
+    select.textContent = '';
+    for (const project of trackedProjects()) {
+      const option = document.createElement('option');
+      option.value = project.projectPath;
+      option.textContent = project.projectName || project.projectFolder;
+      select.appendChild(option);
+    }
+    const fallback = currentTargetDirectory();
+    if (previous && state.projects.some((p) => p.projectPath === previous)) {
+      select.value = previous;
+    } else if (fallback) {
+      select.value = fallback;
+    }
   }
 
   // ---------- chat panel (detail drawer) ----------
@@ -965,6 +1007,7 @@
       empty.className = 'chat-empty';
       empty.textContent = `No conversation yet — say something to ${assistantName()}.`;
       container.appendChild(empty);
+      syncChatGeneratingIndicator();
       return;
     }
 
@@ -983,6 +1026,7 @@
       row.appendChild(bubble);
       container.appendChild(row);
     }
+    syncChatGeneratingIndicator();
     if (nearBottom || container.scrollTop === 0) container.scrollTop = container.scrollHeight;
   }
 
@@ -1317,6 +1361,70 @@
   // message could be fired at a busy agent — which lands both sends on one entry
   // in claudeCli's running map, and the first to finish flips isRunning false
   // while the second is still going.
+
+  // Cycles a braille spinner plus an elapsed-seconds count next to the status
+  // text while a run is in flight — a static "is working…" label didn't read
+  // as alive. Keyed by textEl so repeated calls with the same label (this
+  // fires on every poll while a session runs) don't restart the elapsed timer.
+  const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  const workingAnimations = new Map(); // textEl -> { intervalId, label, start, frame }
+
+  function startWorkingAnimation(textEl, label) {
+    if (!textEl) return;
+    const existing = workingAnimations.get(textEl);
+    if (existing && existing.label === label) return;
+    if (existing) clearInterval(existing.intervalId);
+    const anim = { label, start: Date.now(), frame: 0, intervalId: null };
+    const render = () => {
+      const elapsed = Math.floor((Date.now() - anim.start) / 1000);
+      textEl.textContent = `${SPINNER_FRAMES[anim.frame % SPINNER_FRAMES.length]} ${label} ${elapsed}s`;
+      anim.frame += 1;
+    };
+    render();
+    anim.intervalId = setInterval(render, 120);
+    workingAnimations.set(textEl, anim);
+  }
+
+  function stopWorkingAnimation(textEl) {
+    const existing = textEl && workingAnimations.get(textEl);
+    if (!existing) return;
+    clearInterval(existing.intervalId);
+    workingAnimations.delete(textEl);
+  }
+
+  // Whether the open session is generating, and what to say — set only by
+  // setDetailComposerRunning below, so the chat feed and the composer status
+  // never disagree about it. renderChatMessages rebuilds #chat-history from
+  // scratch on every transcript update, which would otherwise drop this row
+  // as fast as it's added; syncChatGeneratingIndicator re-adds it from this
+  // flag every time, immediately on send and after every rebuild.
+  let chatIsGenerating = false;
+  let chatGeneratingLabel = '';
+
+  function syncChatGeneratingIndicator() {
+    const container = document.getElementById('chat-history');
+    if (!container) return;
+    let row = document.getElementById('chat-generating-indicator');
+    if (chatIsGenerating) {
+      if (!row) {
+        row = document.createElement('div');
+        row.id = 'chat-generating-indicator';
+        row.className = 'chat-row chat-row--assistant';
+        const avatar = document.createElement('span');
+        avatar.className = 'orb orb--dot';
+        row.appendChild(avatar);
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-msg chat-msg--generating';
+        row.appendChild(bubble);
+        container.appendChild(row);
+      }
+      startWorkingAnimation(row.querySelector('.chat-msg'), chatGeneratingLabel);
+    } else if (row) {
+      stopWorkingAnimation(row.querySelector('.chat-msg'));
+      row.remove();
+    }
+  }
+
   function setDetailComposerRunning(running, statusText, needsInput) {
     const composer = document.getElementById('detail-composer');
     const btn = document.getElementById('detail-send-btn');
@@ -1330,6 +1438,9 @@
       status.classList.toggle('composer-status--needs-input', !!needsInput);
     }
     if (dot) dot.classList.toggle('composer-status-dot--needs-input', !!needsInput);
+    // The animated spinner lives in the chat feed itself (syncChatGeneratingIndicator
+    // below) — this status line next to the send button stays static so the same
+    // "generating" motion isn't duplicated right under the input box.
     if (text && running) text.textContent = statusText || `${assistantName()} is working…`;
     if (btn) {
       btn.dataset.mode = running ? 'stop' : 'send';
@@ -1339,6 +1450,9 @@
       btn.setAttribute('aria-label', running ? 'Stop this session' : 'Send');
       btn.disabled = false;
     }
+    chatIsGenerating = running;
+    chatGeneratingLabel = statusText || `${assistantName()} is working…`;
+    syncChatGeneratingIndicator();
   }
 
   // `claude mcp list` live-checks every server over the network (~15s), so it
@@ -2349,7 +2463,10 @@
     const text = document.getElementById('command-composer-status-text');
     if (composer) composer.classList.toggle('composer--running', busy);
     if (status) status.hidden = !busy;
-    if (text && busy) text.textContent = `${assistantName()} is working…`;
+    if (text) {
+      if (busy) startWorkingAnimation(text, `${assistantName()} is working…`);
+      else stopWorkingAnimation(text);
+    }
     if (btn) {
       btn.disabled = busy;
       btn.title = busy ? 'Waiting for the agent to finish…' : 'Start a session (Enter)';
@@ -2954,7 +3071,11 @@
 
     document.getElementById('backlog-add-btn').addEventListener('click', () => {
       const input = document.getElementById('backlog-input');
-      addBacklogItem(input.value.trim(), currentTargetDirectory()).then(() => {
+      const folderSelect = document.getElementById('backlog-folder-select');
+      const prioritySelect = document.getElementById('backlog-priority-select');
+      const repoPath = (folderSelect && folderSelect.value) || currentTargetDirectory();
+      const priority = (prioritySelect && prioritySelect.value) || 'medium';
+      addBacklogItem(input.value.trim(), repoPath, priority).then(() => {
         if (input.value) input.value = '';
       });
     });

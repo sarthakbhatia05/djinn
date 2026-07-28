@@ -231,6 +231,12 @@
         </div>
         <div class="backlog-add-row">
           <input class="mono backlog-input" id="backlog-input" placeholder="Add a task, then assign it to a repo…">
+          <select class="mono backlog-add-select" id="backlog-folder-select" title="Repo"></select>
+          <select class="mono backlog-add-select" id="backlog-priority-select" title="Priority">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
           <button class="btn dotnum backlog-add-btn" id="backlog-add-btn">+ Add</button>
         </div>
         <div class="backlog-list" id="backlog-list"></div>
