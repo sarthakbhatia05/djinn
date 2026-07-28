@@ -42,7 +42,11 @@ function createBacklogRouter({ backlogStore }) {
   });
 
   router.delete('/:id', (req, res) => {
-    backlogStore.remove(req.params.id);
+    const removed = backlogStore.remove(req.params.id);
+    if (!removed) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
     res.status(204).end();
   });
 

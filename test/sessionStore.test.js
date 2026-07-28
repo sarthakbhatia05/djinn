@@ -517,3 +517,85 @@ test('listSessions survives extraProjectPaths throwing', () => {
   assert.strictEqual(sessions.length, 1);
   assert.strictEqual(sessions[0].projectPath, 'D:/Projects/acme/acme-web');
 });
+
+// The claudeCli fix (2026-07-28) found that decoding a stream chunk-by-chunk
+// mangles a multi-byte character split across chunk boundaries. readHead does
+// something that looks similar — a fixed-size read followed by toString('utf-8')
+// — so worth checking it doesn't have the same failure mode. It doesn't, but
+// for a structural reason rather than luck: this is one read plus one decode of
+// a byte range, not several incremental ones, so a split can only ever land in
+// the tail of that single range. Every line that ends with a '\n' before the
+// cutoff is fully inside the read and decodes correctly regardless of what
+// happens afterward; only a line straddling the cutoff itself can be affected,
+// and that line's JSON.parse already fails on truncation alone — same as the
+// existing "prompt past the 64KB budget" case this file documents above
+// READ_HEAD_BYTES. This test pins that: a multi-byte character engineered to
+// land exactly on the 65536-byte boundary must not corrupt anything readable,
+// only (at most) cost the one straddling line.
+test('a multi-byte character split exactly on the 64KB head-read boundary does not corrupt or crash', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  const projectFolder = 'D--Projects-acme-acme-web';
+  const projectDir = path.join(claudeHomeDir, projectFolder);
+  fs.mkdirSync(projectDir, { recursive: true });
+  const sessionId = 'aaaa1111-cb21-423f-ace5-9bdc7b002e94';
+
+  const READ_HEAD_BYTES = 65536;
+  // Content is well past the 65536-byte cut regardless of shim length, so the
+  // run's *end* offset (which shim length controls) is irrelevant to whether
+  // the cut splits a character — only where the run *starts* matters, since
+  // that fixes the cut's phase relative to a 4-byte character. shim shifts the
+  // start by exactly one byte per unit, cycling through all 4 possible phases
+  // as it varies, so trying 4 consecutive values is guaranteed to hit a split.
+  const fillerCount = Math.ceil(READ_HEAD_BYTES / 4) + 20;
+  const makeModeLine = (shimLength) => JSON.stringify({
+    type: 'mode', mode: 'normal', sessionId, shim: 'x'.repeat(shimLength),
+  });
+  const makePaddingLine = () => JSON.stringify({
+    type: 'user',
+    isMeta: true, // not a title candidate itself — pure padding
+    message: { role: 'user', content: '🎉'.repeat(fillerCount) },
+    sessionId,
+  });
+
+  const separator = String.fromCharCode(10);
+  const paddingLineContent = makePaddingLine();
+  let modeLine = null;
+  for (let shimLength = 0; shimLength < 4; shimLength++) {
+    const candidateModeLine = makeModeLine(shimLength);
+    const head = Buffer.from(candidateModeLine + separator + paddingLineContent, 'utf-8')
+      .subarray(0, READ_HEAD_BYTES);
+    if (head.toString('utf-8').includes(String.fromCharCode(0xFFFD))) {
+      modeLine = candidateModeLine;
+      break;
+    }
+  }
+  assert.ok(modeLine, 'must find a prefix length that splits a character on the read boundary, or the test proves nothing');
+  const paddingLine = paddingLineContent;
+
+  const titleLine = JSON.stringify({
+    type: 'user',
+    isMeta: false,
+    message: { role: 'user', content: 'fix the checkout race condition' },
+    gitBranch: 'feat/checkout-refactor',
+    sessionId,
+  });
+
+  const lines = [modeLine, paddingLine, titleLine];
+  fs.writeFileSync(path.join(projectDir, `${sessionId}.jsonl`), lines.join('\n') + '\n', 'utf-8');
+  fs.writeFileSync(registryPath, JSON.stringify({
+    projects: { 'D:/Projects/acme/acme-web': { lastSessionId: sessionId } },
+  }), 'utf-8');
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  const sessions = store.listSessions(); // must not throw
+
+  assert.strictEqual(sessions.length, 1);
+  // The real title line sits past the truncated boundary, so it is out of
+  // budget — same documented miss as any transcript whose prompt exceeds 64KB.
+  // The point being verified is what it must NOT do: produce a mangled title,
+  // a stray U+FFFD, or a crash.
+  assert.strictEqual(sessions[0].title, null);
+  assert.strictEqual(sessions[0].gitBranch, null);
+});

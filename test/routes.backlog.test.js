@@ -71,12 +71,22 @@ test('PATCH /api/backlog/:id 404s for an unknown id', async () => {
   server.close();
 });
 
-test('DELETE /api/backlog/:id returns 204', async () => {
-  const backlogStore = { list: () => [], add: () => {}, remove: () => {} };
+test('DELETE /api/backlog/:id returns 204 when the item existed', async () => {
+  const backlogStore = { list: () => [], add: () => {}, remove: () => true };
   const server = createApp(makeDeps(backlogStore)).listen(0);
   const { port } = server.address();
   const { status } = await request(port, 'DELETE', '/api/backlog/1');
   assert.strictEqual(status, 204);
+  server.close();
+});
+
+test('DELETE /api/backlog/:id 404s for an unknown id, matching PATCH', async () => {
+  const backlogStore = { list: () => [], add: () => {}, remove: () => false };
+  const server = createApp(makeDeps(backlogStore)).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'DELETE', '/api/backlog/missing');
+  assert.strictEqual(status, 404);
+  assert.deepStrictEqual(body, { error: 'not found' });
   server.close();
 });
 
