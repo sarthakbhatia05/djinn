@@ -54,7 +54,7 @@ const slashCommands = { listSlashCommands };
 const claudeUserConfig = { getClaudeUserDefaults };
 const mcpStatus = createMcpStatus();
 
-const app = createApp({ sessionStore, claudeCli, backlogStore, memoryStore, recentDirectories, settingsStore, folderPicker, filePicker, slashCommands, claudeUserConfig, mcpStatus });
+const app = createApp({ sessionStore, claudeCli, backlogStore, memoryStore, recentDirectories, settingsStore, folderPicker, filePicker, slashCommands, claudeUserConfig, mcpStatus, broadcast });
 const server = http.createServer(app);
 
 const transcriptWatcher = createTranscriptWatcher({
