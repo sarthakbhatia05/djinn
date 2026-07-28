@@ -37,10 +37,13 @@ function makeDeps(backlogStore) {
 
 test('POST /api/backlog requires title and repoPath', async () => {
   const server = createApp(makeDeps({ list: () => [], add: () => {} })).listen(0);
-  const { port } = server.address();
-  const { status } = await request(port, 'POST', '/api/backlog', {});
-  assert.strictEqual(status, 400);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status } = await request(port, 'POST', '/api/backlog', {});
+    assert.strictEqual(status, 400);
+  } finally {
+    server.close();
+  }
 });
 
 test('POST /api/backlog then GET /api/backlog round-trips', async () => {
@@ -54,40 +57,52 @@ test('POST /api/backlog then GET /api/backlog round-trips', async () => {
     },
   };
   const server = createApp(makeDeps(backlogStore)).listen(0);
-  const { port } = server.address();
-  const created = await request(port, 'POST', '/api/backlog', { title: 'Fix bug', repoPath: 'D:/demo' });
-  assert.strictEqual(created.status, 201);
-  const listed = await request(port, 'GET', '/api/backlog');
-  assert.strictEqual(listed.body.length, 1);
-  server.close();
+  try {
+    const { port } = server.address();
+    const created = await request(port, 'POST', '/api/backlog', { title: 'Fix bug', repoPath: 'D:/demo' });
+    assert.strictEqual(created.status, 201);
+    const listed = await request(port, 'GET', '/api/backlog');
+    assert.strictEqual(listed.body.length, 1);
+  } finally {
+    server.close();
+  }
 });
 
 test('PATCH /api/backlog/:id 404s for an unknown id', async () => {
   const backlogStore = { list: () => [], add: () => {}, update: () => null };
   const server = createApp(makeDeps(backlogStore)).listen(0);
-  const { port } = server.address();
-  const { status } = await request(port, 'PATCH', '/api/backlog/missing', { done: true });
-  assert.strictEqual(status, 404);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status } = await request(port, 'PATCH', '/api/backlog/missing', { done: true });
+    assert.strictEqual(status, 404);
+  } finally {
+    server.close();
+  }
 });
 
 test('DELETE /api/backlog/:id returns 204 when the item existed', async () => {
   const backlogStore = { list: () => [], add: () => {}, remove: () => true };
   const server = createApp(makeDeps(backlogStore)).listen(0);
-  const { port } = server.address();
-  const { status } = await request(port, 'DELETE', '/api/backlog/1');
-  assert.strictEqual(status, 204);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status } = await request(port, 'DELETE', '/api/backlog/1');
+    assert.strictEqual(status, 204);
+  } finally {
+    server.close();
+  }
 });
 
 test('DELETE /api/backlog/:id 404s for an unknown id, matching PATCH', async () => {
   const backlogStore = { list: () => [], add: () => {}, remove: () => false };
   const server = createApp(makeDeps(backlogStore)).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'DELETE', '/api/backlog/missing');
-  assert.strictEqual(status, 404);
-  assert.deepStrictEqual(body, { error: 'not found' });
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'DELETE', '/api/backlog/missing');
+    assert.strictEqual(status, 404);
+    assert.deepStrictEqual(body, { error: 'not found' });
+  } finally {
+    server.close();
+  }
 });
 
 test('PATCH /api/backlog/:id ignores id and createdAt from the request body (mass-assignment guard)', async () => {
@@ -113,27 +128,33 @@ test('PATCH /api/backlog/:id ignores id and createdAt from the request body (mas
     },
   };
   const server = createApp(makeDeps(backlogStore)).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'PATCH', '/api/backlog/1', {
-    id: 'hacked-id',
-    createdAt: '1999-01-01T00:00:00.000Z',
-    title: 'new title',
-    done: true,
-  });
-  assert.strictEqual(status, 200);
-  assert.strictEqual(body.id, '1');
-  assert.strictEqual(body.createdAt, '2020-01-01T00:00:00.000Z');
-  assert.strictEqual(body.title, 'new title');
-  assert.strictEqual(body.done, true);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'PATCH', '/api/backlog/1', {
+      id: 'hacked-id',
+      createdAt: '1999-01-01T00:00:00.000Z',
+      title: 'new title',
+      done: true,
+    });
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body.id, '1');
+    assert.strictEqual(body.createdAt, '2020-01-01T00:00:00.000Z');
+    assert.strictEqual(body.title, 'new title');
+    assert.strictEqual(body.done, true);
+  } finally {
+    server.close();
+  }
 });
 
 test('PATCH /api/backlog/:id returns JSON (not HTML) when the store throws', async () => {
   const backlogStore = { list: () => [], add: () => {}, update: () => { throw new Error('disk full'); } };
   const server = createApp(makeDeps(backlogStore)).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'PATCH', '/api/backlog/1', { done: true });
-  assert.strictEqual(status, 500);
-  assert.ok(body && body.error);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'PATCH', '/api/backlog/1', { done: true });
+    assert.strictEqual(status, 500);
+    assert.ok(body && body.error);
+  } finally {
+    server.close();
+  }
 });

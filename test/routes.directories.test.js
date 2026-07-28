@@ -33,69 +33,90 @@ function makeDeps({ recentDirectories, folderPicker, filePicker }) {
 test('GET /api/directories/recent returns the list', async () => {
   const deps = makeDeps({ recentDirectories: { list: () => ['D:\\a'], add: () => {} }, folderPicker: { pickFolder: async () => null } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/directories/recent');
-  assert.strictEqual(status, 200);
-  assert.deepStrictEqual(body, ['D:\\a']);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/directories/recent');
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body, ['D:\\a']);
+  } finally {
+    server.close();
+  }
 });
 
 test('POST /api/directories/browse returns the picked path', async () => {
   const deps = makeDeps({ recentDirectories: { list: () => [], add: () => {} }, folderPicker: { pickFolder: async () => 'D:\\chosen' }, filePicker: { pickFile: async () => null } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'POST', '/api/directories/browse');
-  assert.strictEqual(status, 200);
-  assert.deepStrictEqual(body, { path: 'D:\\chosen' });
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'POST', '/api/directories/browse');
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body, { path: 'D:\\chosen' });
+  } finally {
+    server.close();
+  }
 });
 
 test('POST /api/directories/browse-file returns the picked file path', async () => {
   const deps = makeDeps({ recentDirectories: { list: () => [], add: () => {} }, folderPicker: { pickFolder: async () => null }, filePicker: { pickFile: async () => 'D:\\chosen\\file.txt' } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'POST', '/api/directories/browse-file');
-  assert.strictEqual(status, 200);
-  assert.deepStrictEqual(body, { path: 'D:\\chosen\\file.txt' });
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'POST', '/api/directories/browse-file');
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body, { path: 'D:\\chosen\\file.txt' });
+  } finally {
+    server.close();
+  }
 });
 
 test('POST /api/directories/browse-file returns null path when cancelled', async () => {
   const deps = makeDeps({ recentDirectories: { list: () => [], add: () => {} }, folderPicker: { pickFolder: async () => null }, filePicker: { pickFile: async () => null } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'POST', '/api/directories/browse-file');
-  assert.strictEqual(status, 200);
-  assert.deepStrictEqual(body, { path: null });
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'POST', '/api/directories/browse-file');
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body, { path: null });
+  } finally {
+    server.close();
+  }
 });
 
 test('POST /api/directories/browse-file returns 500 when the picker rejects', async () => {
   const deps = makeDeps({ recentDirectories: { list: () => [], add: () => {} }, folderPicker: { pickFolder: async () => null }, filePicker: { pickFile: async () => { throw new Error('picker blew up'); } } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'POST', '/api/directories/browse-file');
-  assert.strictEqual(status, 500);
-  assert.ok(body.error);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'POST', '/api/directories/browse-file');
+    assert.strictEqual(status, 500);
+    assert.ok(body.error);
+  } finally {
+    server.close();
+  }
 });
 
 test('GET /api/directories/recent returns JSON (not HTML) when recentDirectories.list throws', async () => {
   const deps = makeDeps({ recentDirectories: { list: () => { throw new Error('boom'); }, add: () => {} }, folderPicker: { pickFolder: async () => null } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/directories/recent');
-  assert.strictEqual(status, 500);
-  assert.ok(body && body.error);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/directories/recent');
+    assert.strictEqual(status, 500);
+    assert.ok(body && body.error);
+  } finally {
+    server.close();
+  }
 });
 
 test('POST /api/directories/browse returns JSON (not HTML) when the picker rejects', async () => {
   const deps = makeDeps({ recentDirectories: { list: () => [], add: () => {} }, folderPicker: { pickFolder: async () => { throw new Error('picker blew up'); } } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'POST', '/api/directories/browse');
-  assert.strictEqual(status, 500);
-  assert.ok(body && body.error);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'POST', '/api/directories/browse');
+    assert.strictEqual(status, 500);
+    assert.ok(body && body.error);
+  } finally {
+    server.close();
+  }
 });

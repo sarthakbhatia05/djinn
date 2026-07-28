@@ -43,22 +43,28 @@ test('GET /api/mcp/status returns servers for the given cwd', async () => {
     },
   });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/mcp/status?cwd=' + encodeURIComponent('D:\\Projects\\demo'));
-  assert.strictEqual(status, 200);
-  assert.deepStrictEqual(body, { servers: [{ name: 'my-server', target: 'cmd', status: 'connected', statusText: 'Connected' }] });
-  assert.strictEqual(receivedCwd, 'D:\\Projects\\demo');
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/mcp/status?cwd=' + encodeURIComponent('D:\\Projects\\demo'));
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body, { servers: [{ name: 'my-server', target: 'cmd', status: 'connected', statusText: 'Connected' }] });
+    assert.strictEqual(receivedCwd, 'D:\\Projects\\demo');
+  } finally {
+    server.close();
+  }
 });
 
 test('GET /api/mcp/status returns 400 when cwd is missing', async () => {
   const deps = makeDeps({ mcpStatus: { listServers: async () => ({ servers: [] }) } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/mcp/status');
-  assert.strictEqual(status, 400);
-  assert.deepStrictEqual(body, { error: 'cwd is required' });
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/mcp/status');
+    assert.strictEqual(status, 400);
+    assert.deepStrictEqual(body, { error: 'cwd is required' });
+  } finally {
+    server.close();
+  }
 });
 
 test('GET /api/mcp/status returns 502 when the CLI call fails', async () => {
@@ -66,9 +72,12 @@ test('GET /api/mcp/status returns 502 when the CLI call fails', async () => {
     mcpStatus: { listServers: async () => { throw new Error('claude mcp list exited with code 1: boom'); } },
   });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/mcp/status?cwd=' + encodeURIComponent('D:\\demo'));
-  assert.strictEqual(status, 502);
-  assert.deepStrictEqual(body, { error: 'claude mcp list exited with code 1: boom' });
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/mcp/status?cwd=' + encodeURIComponent('D:\\demo'));
+    assert.strictEqual(status, 502);
+    assert.deepStrictEqual(body, { error: 'claude mcp list exited with code 1: boom' });
+  } finally {
+    server.close();
+  }
 });

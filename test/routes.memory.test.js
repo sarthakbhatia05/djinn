@@ -45,20 +45,26 @@ test('GET then PUT /api/memory/common round-trips', async () => {
     setProject: () => ({ text: '' }),
   };
   const server = createApp(makeDeps(memoryStore)).listen(0);
-  const { port } = server.address();
-  await request(port, 'PUT', '/api/memory/common', { text: 'shared notes' });
-  const { body } = await request(port, 'GET', '/api/memory/common');
-  assert.deepStrictEqual(body, { text: 'shared notes' });
-  server.close();
+  try {
+    const { port } = server.address();
+    await request(port, 'PUT', '/api/memory/common', { text: 'shared notes' });
+    const { body } = await request(port, 'GET', '/api/memory/common');
+    assert.deepStrictEqual(body, { text: 'shared notes' });
+  } finally {
+    server.close();
+  }
 });
 
 test('GET /api/memory/project requires a path query param', async () => {
   const memoryStore = { getCommon: () => ({ text: '' }), setCommon: () => ({}), getProject: () => ({ text: '' }), setProject: () => ({}) };
   const server = createApp(makeDeps(memoryStore)).listen(0);
-  const { port } = server.address();
-  const { status } = await request(port, 'GET', '/api/memory/project');
-  assert.strictEqual(status, 400);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status } = await request(port, 'GET', '/api/memory/project');
+    assert.strictEqual(status, 400);
+  } finally {
+    server.close();
+  }
 });
 
 test('PUT then GET /api/memory/project round-trips for a given path', async () => {
@@ -70,11 +76,14 @@ test('PUT then GET /api/memory/project round-trips for a given path', async () =
     setProject: (p, text) => { const v = { text }; perProject.set(p, v); return v; },
   };
   const server = createApp(makeDeps(memoryStore)).listen(0);
-  const { port } = server.address();
-  await request(port, 'PUT', '/api/memory/project', { path: 'D:/demo', text: 'per-project notes' });
-  const { body } = await request(port, 'GET', '/api/memory/project?path=D:/demo');
-  assert.deepStrictEqual(body, { text: 'per-project notes' });
-  server.close();
+  try {
+    const { port } = server.address();
+    await request(port, 'PUT', '/api/memory/project', { path: 'D:/demo', text: 'per-project notes' });
+    const { body } = await request(port, 'GET', '/api/memory/project?path=D:/demo');
+    assert.deepStrictEqual(body, { text: 'per-project notes' });
+  } finally {
+    server.close();
+  }
 });
 
 test('GET /api/memory/common returns JSON (not HTML) when the store throws', async () => {
@@ -85,9 +94,12 @@ test('GET /api/memory/common returns JSON (not HTML) when the store throws', asy
     setProject: () => ({}),
   };
   const server = createApp(makeDeps(memoryStore)).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/memory/common');
-  assert.strictEqual(status, 500);
-  assert.ok(body && body.error);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/memory/common');
+    assert.strictEqual(status, 500);
+    assert.ok(body && body.error);
+  } finally {
+    server.close();
+  }
 });

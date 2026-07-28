@@ -33,11 +33,14 @@ test('GET /api/claude-defaults returns claudeUserConfig.getClaudeUserDefaults()'
     claudeUserConfig: { getClaudeUserDefaults: () => ({ model: 'sonnet', permissionMode: 'default' }) },
   });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/claude-defaults');
-  assert.strictEqual(status, 200);
-  assert.deepStrictEqual(body, { model: 'sonnet', permissionMode: 'default' });
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/claude-defaults');
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body, { model: 'sonnet', permissionMode: 'default' });
+  } finally {
+    server.close();
+  }
 });
 
 test('GET /api/claude-defaults returns nulls when nothing is configured', async () => {
@@ -45,9 +48,12 @@ test('GET /api/claude-defaults returns nulls when nothing is configured', async 
     claudeUserConfig: { getClaudeUserDefaults: () => ({ model: null, permissionMode: null }) },
   });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/claude-defaults');
-  assert.strictEqual(status, 200);
-  assert.deepStrictEqual(body, { model: null, permissionMode: null });
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/claude-defaults');
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body, { model: null, permissionMode: null });
+  } finally {
+    server.close();
+  }
 });

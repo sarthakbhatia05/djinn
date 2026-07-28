@@ -30,11 +30,14 @@ function makeDeps({ slashCommands }) {
 test('GET /api/commands requires a path query parameter', async () => {
   const deps = makeDeps({ slashCommands: { listSlashCommands: () => [] } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/commands');
-  assert.strictEqual(status, 400);
-  assert.ok(body.error);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/commands');
+    assert.strictEqual(status, 400);
+    assert.ok(body.error);
+  } finally {
+    server.close();
+  }
 });
 
 test('GET /api/commands?path=... returns { commands } from slashCommands.listSlashCommands', async () => {
@@ -48,10 +51,13 @@ test('GET /api/commands?path=... returns { commands } from slashCommands.listSla
     },
   });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/commands?path=D%3A%5Cdemo');
-  assert.strictEqual(status, 200);
-  assert.deepStrictEqual(body, { commands: [{ name: 'clear', description: 'Clear history', source: 'builtin' }] });
-  assert.deepStrictEqual(calls, ['D:\\demo']);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/commands?path=D%3A%5Cdemo');
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body, { commands: [{ name: 'clear', description: 'Clear history', source: 'builtin' }] });
+    assert.deepStrictEqual(calls, ['D:\\demo']);
+  } finally {
+    server.close();
+  }
 });
