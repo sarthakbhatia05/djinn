@@ -186,6 +186,29 @@ test('POST /api/sessions/:id/message 409s when the project path never resolved',
   server.close();
 });
 
+test('POST /api/sessions/:id/message surfaces claudeCli\'s 409 with the message intact and logs nothing', async () => {
+  const logger = makeLogger();
+  const deps = makeDeps({
+    logger,
+    claudeCli: {
+      isRunning: () => true,
+      startSession: async () => ({}),
+      sendMessage: async () => {
+        throw Object.assign(new Error('a run is already in progress for this session'), { status: 409 });
+      },
+    },
+  });
+  const server = createApp(deps).listen(0);
+  const { port } = server.address();
+  const { status, body } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
+  // No try/catch in the route: asyncHandler forwards the rejection and the
+  // error middleware passes err.message through because the status is < 500.
+  assert.strictEqual(status, 409);
+  assert.strictEqual(body.error, 'a run is already in progress for this session');
+  assert.deepStrictEqual(logger.errors, [], 'a deliberate 4xx must stay out of the error log');
+  server.close();
+});
+
 test('GET /api/sessions/active-count returns activeCount from claudeCli', async () => {
   const deps = makeDeps({
     claudeCli: {

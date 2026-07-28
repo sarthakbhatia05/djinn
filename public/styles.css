@@ -1862,3 +1862,97 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   padding: 0;
   white-space: pre;
 }
+
+/* ---------- The one width breakpoint: the sidebar collapses to a rail ----------
+
+   Where the layout actually stops fitting. Every number below is a border-box
+   width, because of the global `* { box-sizing: border-box }` at the top of
+   this file, so the 1px borders on .sidebar and .drawer are already inside it:
+
+     .sidebar                    224px   fixed, flex-shrink: 0
+     .main-content, minimum      288px   = 220  the declared floor of the session
+                                                grid's minmax(220px, 1fr) track
+                                         +  60  padding: 26px 30px
+                                         +   8  its own scrollbar
+                                                (::-webkit-scrollbar { width: 8px })
+     .drawer                     360px   default width, flex-shrink: 0
+     --------------------------------
+                                 872px
+
+   Confirmed in the browser rather than assumed: at exactly 872px with a session
+   open, grid-template-columns resolves to "220px" — the declared minimum, hit
+   dead on. One pixel narrower and the track is crushed below the width the grid
+   says it needs, so 871px is the first broken width and the collapse fires here.
+
+   A 56px rail hands 168px back to .main-content, which keeps the layout above
+   its floor down to 56 + 288 + 360 = 704px. Below that a second breakpoint
+   would be needed (most likely one that stops the drawer being a flex sibling
+   and overlays it instead); this file deliberately stops at one.
+
+   Nothing here adds a border, a box or a divider to hold the collapsed state
+   together — the rail is the same list with its labels removed. .drawer,
+   .drawer--wide, .drawer--full and .main--drawer-full are untouched. */
+@media (max-width: 871px) {
+  .sidebar {
+    width: 56px;
+    padding: 16px 8px;
+    /* The rail is narrower than its own contents mid-transition (and narrower
+       than the project-list empty state's text); clip rather than let anything
+       poke through the border-right. */
+    overflow: hidden;
+  }
+
+  /* Everything whose only job is to label a column of text. At rail width there
+     is no column left to label, so it goes rather than gets shrunk. */
+  .sidebar .sidebar-label,
+  .sidebar .sidebar-footer,
+  .sidebar .row-count,
+  .sidebar .project-row-path,
+  .sidebar .empty-state { display: none; }
+
+  .sidebar .row {
+    justify-content: center;
+    gap: 5px;
+    padding: 9px 0;
+  }
+  /* .row--active carries a 2px accent edge. Matching it with a transparent one
+     everywhere else keeps every glyph on the same optical centre instead of
+     nudging the active row 2px left. */
+  .sidebar .row:not(.row--active) { border-left: 2px solid transparent; }
+
+  /* The two fixed rows trade their labels for a glyph. Both are drawn from the
+     same block-element family, so at rail size they read as one set: a grid of
+     cards, and a page of lines. The full labels survive as the title attributes
+     on these rows in index.html. */
+  #all-sessions-row .row-title,
+  #memory-row .row-title { display: none; }
+  #all-sessions-row::before,
+  #memory-row::before {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--text-muted);
+  }
+  #all-sessions-row::before { content: '\25A6'; }  /* ▦ — the session grid */
+  #memory-row::before { content: '\25A4'; }        /* ▤ — the memory notes */
+  /* Which of the two panes you are in is the one thing the rail must not lose.
+     The id has to be repeated here: a plain .row--active::before selector is
+     less specific than the #id::before rules above and silently loses. */
+  #all-sessions-row.row--active::before,
+  #memory-row.row--active::before { color: var(--accent); }
+
+  /* Project rows keep their status dot and collapse the name to its initial.
+     font-size:0 on the block plus a sized ::first-letter is what makes that
+     exact — no character-width guesswork, no clipped glyph — and it means the
+     browser derives the rail icon from text app.js already wrote, so no
+     JavaScript has to supply one. */
+  .sidebar .project-row-info { flex: 0 0 auto; }
+  .sidebar .project-row-name {
+    font-size: 0;
+    text-transform: uppercase;
+  }
+  .sidebar .project-row-name::first-letter {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+}

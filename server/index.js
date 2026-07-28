@@ -1,7 +1,7 @@
 // server/index.js
 const path = require('path');
 const http = require('http');
-const { WebSocketServer } = require('ws');
+const { WebSocketServer, WebSocket } = require('ws');
 const { createApp } = require('./app');
 const { createSessionStore } = require('./lib/sessionStore');
 const { createClaudeCli } = require('./lib/claudeCli');
@@ -24,7 +24,12 @@ const wss = new WebSocketServer({ noServer: true });
 function broadcast(message) {
   const payload = JSON.stringify(message);
   for (const client of wss.clients) {
-    if (client.readyState === client.OPEN) client.send(payload);
+    // Compare against the class constant, not client.OPEN: reading the state
+    // constant off the instance only works because it happens to be inherited,
+    // and it silently yields undefined for anything in wss.clients that isn't a
+    // real ws socket — which would make readyState === undefined never match
+    // and drop the broadcast without an error.
+    if (client.readyState === WebSocket.OPEN) client.send(payload);
   }
 }
 

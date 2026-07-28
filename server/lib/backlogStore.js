@@ -30,8 +30,19 @@ function createBacklogStore({ filePath }) {
     return items[idx];
   }
 
+  // Returns true when an item was actually removed, false when the id wasn't
+  // there. The early return is not just a saved write: writeJson does a
+  // write-then-rename that intermittently hits EPERM on Windows while an
+  // antivirus or indexer holds the handle, so rewriting the whole backlog to
+  // produce a byte-identical file put the user's real data at risk for a
+  // DELETE of an id that was already gone (a double-click on delete, or a
+  // second tab replaying a stale list, does exactly that).
   function remove(id) {
-    writeJson(filePath, list().filter((i) => i.id !== id));
+    const items = list();
+    const remaining = items.filter((i) => i.id !== id);
+    if (remaining.length === items.length) return false;
+    writeJson(filePath, remaining);
+    return true;
   }
 
   return { list, add, update, remove };

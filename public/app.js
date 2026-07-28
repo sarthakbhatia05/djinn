@@ -164,6 +164,7 @@
     state.sessions = sessions;
     state.activeCount = activeCountResult ? activeCountResult.activeCount : 0;
     seedViewedBaseline();
+    pruneDraftsForMissingSessions();
     renderSessions();
     updateHeaderStats();
     updateOpenDetailIfPresent();
@@ -729,6 +730,11 @@
       if (history) history.innerHTML = '';
       loadChatMessages(sessionId);
       watchSession(sessionId);
+      // The composer belongs to whichever session is open: bring back that
+      // session's saved draft (or blank it), never the previous one's text.
+      // Runs after renderDetail has displayed the drawer, so the auto-grow
+      // inside can actually measure.
+      restoreComposerDraft(COMPOSERS.detail);
       closeSlashPopup();
       closeMcpPanel();
     }
@@ -1368,6 +1374,7 @@
 
   const COMPOSERS = {
     detail: {
+      key: 'detail', // stable storage bucket for history/drafts — see below
       inputId: 'detail-send-input',
       popupId: 'slash-popup',
       projectPath: () => {
@@ -1376,6 +1383,7 @@
       },
     },
     command: {
+      key: 'command',
       inputId: 'command-input',
       popupId: 'command-slash-popup',
       projectPath: () => currentTargetDirectory(),
@@ -1402,6 +1410,290 @@
     if (!input) return;
     input.value = '';
     autoGrowComposer(input);
+  }
+
+  // ---------- prompt history + drafts ----------
+  //
+  // Two localStorage-backed conveniences over the composers. Both follow the
+  // same guarded read/write idiom as the prefs above: a browser with storage
+  // disabled (private mode, quota exhausted) degrades to in-memory-only for the
+  // page's lifetime rather than throwing.
+  //
+  // HISTORY SCOPE is per composer *surface* — one ring for the command bar, one
+  // for the drawer — not global and not per session. The command bar starts new
+  // work ("add rate limiting to the API"); the drawer sends follow-ups ("now run
+  // the tests", "revert that"). One shared ring would make ↑ in the command bar
+  // offer sentence fragments that only meant anything inside one conversation.
+  // Per-session is too narrow in the other direction: the whole point of recall
+  // is re-running a tweaked variant of a prompt against a *different* session,
+  // which a per-session ring can never offer.
+  //
+  // DRAFT KEYS are per session id for the drawer, and a single global key for
+  // the command bar. There is only one command bar, and its content is a task
+  // you are composing — often typed *before* the directory chip is set (the
+  // send path explicitly prompts "pick a directory first"). Keying it by target
+  // directory would blank the box the moment you changed the chip, destroying
+  // exactly the text the feature exists to protect.
+
+  const PROMPT_HISTORY_KEY = 'djinn.promptHistory';
+  const COMPOSER_DRAFTS_KEY = 'djinn.composerDrafts';
+
+  // 50 entries per surface is far more than anyone walks by hand and still a
+  // small payload. The character budget is the real guard: a single pasted
+  // stack trace can be tens of KB, and localStorage is ~5MB for the whole
+  // origin — shared with viewed-sessions, drafts and prefs. Entries are never
+  // truncated (a half prompt, recalled and sent, is worse than no history), so
+  // the budget evicts whole oldest entries instead.
+  const HISTORY_MAX_ENTRIES = 50;
+  const HISTORY_MAX_CHARS = 40000;
+  const MAX_SESSION_DRAFTS = 30;
+  const DRAFTS_MAX_CHARS = 200000;
+
+  function readHistoryStore() {
+    try {
+      const raw = localStorage.getItem(PROMPT_HISTORY_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {}; // private mode / corrupt value — behave as "no history"
+    }
+  }
+
+  function writeHistoryStore(store) {
+    try {
+      localStorage.setItem(PROMPT_HISTORY_KEY, JSON.stringify(store));
+    } catch {
+      // storage disabled or full — non-fatal, history just won't persist
+    }
+  }
+
+  // Newest first.
+  function readPromptHistory(ctx) {
+    const list = readHistoryStore()[ctx.key];
+    return Array.isArray(list) ? list.filter((e) => typeof e === 'string') : [];
+  }
+
+  // Empty and whitespace-only sends are never recorded. Exact duplicates
+  // collapse to their newest occurrence anywhere in the ring, not just when
+  // consecutive (readline's `erasedups`): the prompts people re-send are by
+  // definition the ones they send repeatedly, and letting them pile up would
+  // push everything else off the end of a bounded list.
+  function pushPromptHistory(ctx, text) {
+    const entry = String(text == null ? '' : text);
+    if (!entry.trim()) return;
+    const list = readPromptHistory(ctx).filter((e) => e !== entry);
+    list.unshift(entry);
+    let total = list.reduce((n, e) => n + e.length, 0);
+    // The length > 1 guard keeps a single oversized entry rather than emptying
+    // the ring outright — the newest prompt is the one most likely wanted back.
+    while (list.length > HISTORY_MAX_ENTRIES || (list.length > 1 && total > HISTORY_MAX_CHARS)) {
+      total -= list.pop().length;
+    }
+    const store = readHistoryStore();
+    store[ctx.key] = list;
+    writeHistoryStore(store);
+  }
+
+  // Walk position per surface, in memory only — where you are in the ring is
+  // not worth restoring across reloads. index === -1 means "not walking".
+  // `pending` is whatever the user had typed before the first ↑, so ↓ can put
+  // it back. `recalled` is the exact string this walk last wrote into the box:
+  // if the value has since drifted from it (typing, a slash pick, an @ insert)
+  // the walk is stale and the next ↑ starts a fresh one.
+  const historyWalk = {
+    command: { index: -1, pending: '', recalled: null },
+    detail: { index: -1, pending: '', recalled: null },
+  };
+
+  function resetHistoryWalk(ctx) {
+    const walk = historyWalk[ctx.key];
+    if (!walk) return;
+    walk.index = -1;
+    walk.pending = '';
+    walk.recalled = null;
+  }
+
+  function setComposerValue(ctx, value) {
+    const input = composerInput(ctx);
+    if (!input) return;
+    input.value = value;
+    const end = value.length;
+    input.setSelectionRange(end, end);
+    autoGrowComposer(input); // a recalled multi-line prompt must come back tall
+    // What gets *persisted* mid-walk is the text the user was writing, not the
+    // history entry currently on display. walk.pending lives only in memory, so
+    // saving input.value here meant that opening another session part-way
+    // through a walk overwrote the real draft with somebody's old prompt and
+    // lost the unsent one for good — the precise thing drafts exist to prevent.
+    // Once the walk ends, this is input.value again and the two agree.
+    const walk = historyWalk[ctx.key];
+    saveComposerDraftText(ctx, walk && walk.index >= 0 ? walk.pending : input.value);
+  }
+
+  // Returns true when the key was consumed and the caller should preventDefault.
+  //
+  // TRIGGER RULE — recall must never steal a caret move the user meant:
+  //   ↑ recalls when the composer is empty or whitespace-only, OR the selection
+  //     is collapsed at offset 0, OR a walk is already in progress and the box
+  //     still holds exactly what that walk put there.
+  //   ↓ only ever moves forward inside an in-progress, untouched walk.
+  //
+  // Offset 0 is the boundary rather than "the value contains no newline",
+  // because a long single-logical-line prompt soft-wraps to several visual rows
+  // in a textarea and ↑ inside those rows is a real caret move the user wants.
+  // At offset 0 there is no row above to reach in either case, so nothing is
+  // stolen. Once a walk is underway the recalled entry behaves as one readline
+  // "line" — ↑ keeps walking back through it however many rows it occupies,
+  // which is what a shell does — until an edit ends the walk.
+  function walkPromptHistory(ctx, direction) {
+    const input = composerInput(ctx);
+    const walk = historyWalk[ctx.key];
+    if (!input || !walk) return false;
+
+    const walking = walk.index >= 0 && input.value === walk.recalled;
+    const list = readPromptHistory(ctx);
+
+    if (!walking) {
+      if (direction < 0) return false; // ↓ never starts a walk
+      const caretAtStart = input.selectionStart === 0 && input.selectionEnd === 0;
+      if (!caretAtStart && input.value.trim() !== '') return false;
+      if (list.length === 0) return false;
+      walk.pending = input.value;
+      walk.index = 0;
+      walk.recalled = list[0];
+      setComposerValue(ctx, list[0]);
+      return true;
+    }
+
+    if (list.length === 0) { resetHistoryWalk(ctx); return false; }
+    const next = walk.index + (direction > 0 ? 1 : -1);
+    // Already at the oldest entry: swallow the key rather than let the caret
+    // jump out of a prompt the user is looking at.
+    if (next >= list.length) return true;
+    if (next < 0) {
+      const pending = walk.pending;
+      resetHistoryWalk(ctx);
+      setComposerValue(ctx, pending);
+      return true;
+    }
+    walk.index = next;
+    walk.recalled = list[next];
+    setComposerValue(ctx, list[next]);
+    return true;
+  }
+
+  function readDraftStore() {
+    try {
+      const raw = localStorage.getItem(COMPOSER_DRAFTS_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeDraftStore(store) {
+    try {
+      localStorage.setItem(COMPOSER_DRAFTS_KEY, JSON.stringify(store));
+    } catch {
+      // storage disabled or full — the in-memory textarea is unaffected
+    }
+  }
+
+  function draftKeyFor(ctx) {
+    if (ctx.key === 'command') return 'command';
+    return state.activeDetailId ? `session:${state.activeDetailId}` : null;
+  }
+
+  // Keeps the newest MAX_SESSION_DRAFTS session drafts, then keeps dropping the
+  // oldest of those until the whole payload fits the character budget — so one
+  // enormous pasted draft can't make every future write fail the quota and take
+  // all the other sessions' drafts down with it. The command-bar draft is never
+  // evicted; it is the one draft with nowhere else to live.
+  function trimDraftStore(store) {
+    const sessionKeys = Object.keys(store)
+      .filter((k) => k.startsWith('session:'))
+      .sort((a, b) => ((store[b] && store[b].at) || 0) - ((store[a] && store[a].at) || 0));
+    for (const key of sessionKeys.slice(MAX_SESSION_DRAFTS)) delete store[key];
+    const kept = sessionKeys.slice(0, MAX_SESSION_DRAFTS);
+    while (kept.length && JSON.stringify(store).length > DRAFTS_MAX_CHARS) {
+      delete store[kept.pop()];
+    }
+    return store;
+  }
+
+  function saveComposerDraft(ctx) {
+    const input = composerInput(ctx);
+    if (!input) return;
+    saveComposerDraftText(ctx, input.value);
+  }
+
+  // Persists `text` as this composer's draft. Split out from saveComposerDraft
+  // because during a history walk the box and the draft legitimately hold
+  // different things — see setComposerValue.
+  function saveComposerDraftText(ctx, text) {
+    const key = draftKeyFor(ctx);
+    if (!key) return;
+    const store = readDraftStore();
+    if (!text) {
+      if (!(key in store)) return; // nothing stored, nothing to clear
+      delete store[key];
+    } else {
+      store[key] = { text, at: Date.now() };
+    }
+    writeDraftStore(trimDraftStore(store));
+  }
+
+  function clearComposerDraft(ctx) {
+    const key = draftKeyFor(ctx);
+    if (!key) return;
+    const store = readDraftStore();
+    if (!(key in store)) return;
+    delete store[key];
+    writeDraftStore(store);
+  }
+
+  // Also the "no draft" path: writing '' is what stops the previous session's
+  // half-typed message leaking into the one you just opened.
+  function restoreComposerDraft(ctx) {
+    const input = composerInput(ctx);
+    if (!input) return;
+    const key = draftKeyFor(ctx);
+    const entry = key ? readDraftStore()[key] : null;
+    const text = entry && typeof entry.text === 'string' ? entry.text : '';
+    input.value = text;
+    autoGrowComposer(input);
+    resetHistoryWalk(ctx);
+  }
+
+  // Once per page load, after the first session list arrives: a draft keyed to
+  // a session id the server no longer reports can never be reached again.
+  let draftsPruned = false;
+  function pruneDraftsForMissingSessions() {
+    if (draftsPruned || state.sessions.length === 0) return;
+    draftsPruned = true;
+    const live = new Set(state.sessions.map((s) => `session:${s.id}`));
+    const store = readDraftStore();
+    let changed = false;
+    for (const key of Object.keys(store)) {
+      if (key.startsWith('session:') && !live.has(key)) {
+        delete store[key];
+        changed = true;
+      }
+    }
+    if (changed) writeDraftStore(store);
+  }
+
+  // The one funnel for "this message has actually left the box": record it in
+  // that surface's history, drop its saved draft (a draft that survives its own
+  // send would come back on the next visit as a duplicate), clear the input.
+  function commitComposerSend(ctx) {
+    const input = composerInput(ctx);
+    if (!input) return;
+    pushPromptHistory(ctx, input.value);
+    clearComposerDraft(ctx);
+    resetHistoryWalk(ctx);
+    clearComposer(input);
   }
 
   // ---------- slash-command autocomplete ----------
@@ -1642,6 +1934,17 @@
         }
         if (e.key === 'Escape') { e.preventDefault(); closeSlashPopup(); return; }
       }
+      // Shell-style prompt recall. Modified arrows are left alone: Shift+↑ is
+      // selection extension and Alt/Ctrl/Cmd+↑ are word/document moves, none of
+      // which anyone means as "give me my last prompt". The slash popup claims
+      // the arrows first (above) and returns, so the two never collide.
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown')
+          && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (walkPromptHistory(ctx, e.key === 'ArrowUp' ? 1 : -1)) {
+          e.preventDefault();
+          return;
+        }
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         onSubmit();
@@ -1649,10 +1952,17 @@
     });
     input.addEventListener('input', () => {
       autoGrowComposer(input);
+      saveComposerDraft(ctx);
       handleComposerSlash(ctx);
     });
     input.addEventListener('click', () => handleComposerSlash(ctx));
-    input.addEventListener('blur', () => closeSlashPopup());
+    // Close only the popup this composer owns. closeSlashPopup() closes
+    // whichever one is open, and blur fires as focus lands elsewhere — so an
+    // unconditional call here can shut a popup that already belongs to the
+    // composer being focused. Hand-off is still handleComposerSlash's job.
+    input.addEventListener('blur', () => {
+      if (slashState.ctx === ctx) closeSlashPopup();
+    });
     autoGrowComposer(input);
   }
 
@@ -2048,8 +2358,8 @@
       setCommandComposerBusy(false);
     }
     if (result === null) return;
-    clearComposer(input);
-    updateCommandPillsVisibility(); // clearComposer fires no input event
+    commitComposerSend(COMPOSERS.command);
+    updateCommandPillsVisibility(); // clearing fires no input event
     showToast(`${assistantName()} finished the run — session added.`, false);
     await Promise.all([loadSessions(), loadProjects(), loadRecentDirectories()]);
     // This browser just created that session — it shouldn't show as unseen.
@@ -2605,6 +2915,8 @@
       startNewSession(currentTargetDirectory());
     });
     wireComposer(COMPOSERS.command, () => startNewSession(currentTargetDirectory()));
+    // Before wireCommandPills, which computes pill visibility from the value.
+    restoreComposerDraft(COMPOSERS.command);
     wireCommandPills();
     document.getElementById('command-attach-btn')
       .addEventListener('click', () => browseForFile(COMPOSERS.command));
@@ -2680,8 +2992,8 @@
         showToast('That agent is still working — stop it, or wait for it to finish.');
         return;
       }
-      sendDetailMessage(detailInput.value);
-      clearComposer(detailInput);
+      sendDetailMessage(detailInput.value); // async; reads the value before we clear it
+      commitComposerSend(COMPOSERS.detail);
       closeSlashPopup();
     }
     detailSendBtn.addEventListener('click', () => {
