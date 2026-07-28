@@ -599,3 +599,96 @@ test('a multi-byte character split exactly on the 64KB head-read boundary does n
   assert.strictEqual(sessions[0].title, null);
   assert.strictEqual(sessions[0].gitBranch, null);
 });
+
+// ---------- getPendingToolUseSince (needs-input detection) ----------
+//
+// Dashboard-spawned sessions run headless, with no TTY attached — a tool that
+// requires approval under the CLI's own default permission mode hangs
+// forever waiting on a prompt that can never be answered. The transcript's
+// last event being an assistant tool_use with no following tool_result is the
+// only signal available for that (see server/routes/sessions.js for the
+// staleness threshold that turns this into an actual "needs input" status).
+
+function writeRawTranscript(claudeHomeDir, projectFolder, sessionId, lines) {
+  const projectDir = path.join(claudeHomeDir, projectFolder);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, `${sessionId}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf-8');
+}
+
+test('getPendingToolUseSince returns the timestamp when the transcript ends in an unresolved tool_use', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  const sessionId = 'bbbb2222-cb21-423f-ace5-9bdc7b002e94';
+  const ts = '2026-07-28T10:00:00.000Z';
+  writeRawTranscript(claudeHomeDir, 'D--Projects-acme-acme-web', sessionId, [
+    { type: 'mode', mode: 'normal', sessionId },
+    {
+      type: 'assistant',
+      sessionId,
+      timestamp: ts,
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }] },
+    },
+  ]);
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  assert.strictEqual(store.getPendingToolUseSince(sessionId), ts);
+});
+
+test('getPendingToolUseSince returns null once the tool_use is resolved by a following tool_result', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  const sessionId = 'cccc3333-cb21-423f-ace5-9bdc7b002e94';
+  writeRawTranscript(claudeHomeDir, 'D--Projects-acme-acme-web', sessionId, [
+    { type: 'mode', mode: 'normal', sessionId },
+    {
+      type: 'assistant',
+      sessionId,
+      timestamp: '2026-07-28T10:00:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }] },
+    },
+    {
+      type: 'user',
+      sessionId,
+      timestamp: '2026-07-28T10:00:01.000Z',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'done' }] },
+    },
+  ]);
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  assert.strictEqual(store.getPendingToolUseSince(sessionId), null);
+});
+
+test('getPendingToolUseSince returns null when the last assistant turn ends in text, not a tool call', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  const sessionId = 'dddd4444-cb21-423f-ace5-9bdc7b002e94';
+  writeRawTranscript(claudeHomeDir, 'D--Projects-acme-acme-web', sessionId, [
+    { type: 'mode', mode: 'normal', sessionId },
+    {
+      type: 'assistant',
+      sessionId,
+      timestamp: '2026-07-28T10:00:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'All done.' }] },
+    },
+  ]);
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  assert.strictEqual(store.getPendingToolUseSince(sessionId), null);
+});
+
+test('getPendingToolUseSince returns null for an unknown session id rather than throwing', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sessionstore-'));
+  const claudeHomeDir = path.join(root, 'projects');
+  const registryPath = path.join(root, 'claude.json');
+  fs.mkdirSync(claudeHomeDir, { recursive: true });
+  fs.writeFileSync(registryPath, JSON.stringify({ projects: {} }), 'utf-8');
+
+  const store = createSessionStore({ claudeHomeDir, registryPath });
+  assert.strictEqual(store.getPendingToolUseSince('does-not-exist'), null);
+});

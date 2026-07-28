@@ -3,6 +3,15 @@ const express = require('express');
 const { normalizePath } = require('../lib/settingsStore');
 const { asyncHandler } = require('../lib/asyncHandler');
 
+// How long a session's transcript can sit on an unresolved tool_use before
+// it's reported as needing input rather than just running. A single number
+// has to cover both a routine slow tool (a big grep, a full test run) and a
+// permission prompt the headless CLI can never actually get answered — so it
+// errs toward the slow-tool side. 25s comfortably clears ordinary tool calls
+// while still catching a genuine hang well before a user would give up and go
+// check manually themselves.
+const NEEDS_INPUT_STALE_MS = 25000;
+
 function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, settingsStore }) {
   const router = express.Router();
 
@@ -15,10 +24,17 @@ function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, sett
       const tracked = new Set(settingsStore.get().projects.map(normalizePath));
       sessions = sessions.filter((s) => tracked.has(normalizePath(s.projectPath)));
     }
-    res.json(sessions.map((s) => ({
-      ...s,
-      isRunning: claudeCli.isRunning(s.id),
-    })));
+    res.json(sessions.map((s) => {
+      const isRunning = claudeCli.isRunning(s.id);
+      // Only worth the transcript tail-read for sessions actually running —
+      // an idle session can't be "stuck" waiting on anything.
+      let needsInput = false;
+      if (isRunning) {
+        const pendingSince = sessionStore.getPendingToolUseSince(s.id);
+        needsInput = !!pendingSince && (Date.now() - Date.parse(pendingSince)) > NEEDS_INPUT_STALE_MS;
+      }
+      return { ...s, isRunning, needsInput };
+    }));
   });
 
   // Registered before the '/:id/message' style param routes for clarity;

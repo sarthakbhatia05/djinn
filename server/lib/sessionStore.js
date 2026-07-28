@@ -52,6 +52,72 @@ function readHead(filePath) {
   }
 }
 
+// How far from the end of a transcript to look when deciding whether a
+// running session is stuck waiting on a tool the user needs to act on (a
+// permission prompt in particular — dashboard-spawned sessions run headless,
+// with no TTY attached to answer one, so a tool requiring approval under the
+// CLI's own default permission mode hangs forever, not just slowly). 64KB
+// matches READ_HEAD_BYTES: generous enough to comfortably hold the last few
+// JSONL lines, including a sizeable tool result, without reading the whole
+// file on every poll of a long session.
+const TAIL_READ_BYTES = 65536;
+
+function readTail(filePath, stat) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const size = Math.min(TAIL_READ_BYTES, stat.size);
+    const start = stat.size - size;
+    const buffer = Buffer.alloc(size);
+    fs.readSync(fd, buffer, 0, size, start);
+    const text = buffer.toString('utf-8');
+    // Unlike readHead, a tail read can start mid-line. Drop the first line
+    // whenever the read didn't begin at byte 0 of the file — it may be
+    // partial, and a partial JSON line only ever fails to parse anyway, so
+    // dropping it costs nothing but avoids treating a truncation artifact as
+    // a real (if malformed) event.
+    const lines = text.split('\n');
+    return start > 0 ? lines.slice(1) : lines;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Returns the ISO timestamp the session started waiting on an unresolved tool
+// call, or null if it isn't waiting on one (as far as the tail read shows).
+// This is a heuristic, not a certainty: the same signal — the transcript's
+// last event being an assistant message that ends in a tool_use with no
+// tool_result after it — is also just what an ordinary in-flight tool call
+// looks like while it's still running. The caller is expected to only treat
+// this as "stuck" once it has held for a while; a merely slow tool clears it
+// as soon as its result lands, same as in every ordinary run (confirmed
+// against real transcripts: every tool_use in a completed session has exactly
+// one matching tool_result).
+function pendingToolUseSince(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    const lines = readTail(filePath, stat);
+    let last = null;
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let obj;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const content = obj.message && obj.message.content;
+      if (obj.type === 'assistant' && Array.isArray(content)) last = obj;
+      else if (obj.type === 'user' && Array.isArray(content)) last = obj;
+    }
+    if (!last || last.type !== 'assistant') return null; // resolved, or nothing to go on
+    const blocks = last.message.content;
+    const endsInToolUse = blocks.length > 0 && blocks[blocks.length - 1].type === 'tool_use';
+    return endsInToolUse && typeof last.timestamp === 'string' ? last.timestamp : null;
+  } catch {
+    return null; // never let this take session listing down
+  }
+}
+
 function parseHeadMeta(filePath) {
   const head = readHead(filePath);
   const lines = head.split('\n');
@@ -300,7 +366,13 @@ function createSessionStore({
     return messages;
   }
 
-  return { listSessions, listProjects, getTranscriptPath, readMessages };
+  function getPendingToolUseSince(sessionId) {
+    const filePath = getTranscriptPath(sessionId);
+    if (!filePath) return null;
+    return pendingToolUseSince(filePath);
+  }
+
+  return { listSessions, listProjects, getTranscriptPath, readMessages, getPendingToolUseSince };
 }
 
 module.exports = { createSessionStore };

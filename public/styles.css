@@ -187,6 +187,10 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   border-radius: 50%;
   background: var(--ok);
 }
+/* Still pulsing (the process is genuinely alive) but warn-colored, so a
+   session stuck on an unanswered tool call reads as distinct from both an
+   ordinary running session and an idle one. */
+.status-dot--needs-input { background: var(--warn); }
 
 .icon-btn {
   width: 30px;
@@ -1102,7 +1106,9 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   text-overflow: ellipsis;
 }
 .composer-status[hidden] { display: none; }
+.composer-status--needs-input { color: var(--warn); }
 .composer-status-dot { background: var(--accent); }
+.composer-status-dot--needs-input { background: var(--warn); }
 
 .composer-send {
   flex-shrink: 0;
@@ -1759,6 +1765,7 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   flex-shrink: 0;
 }
 .quick-switcher-item-status--running { background: var(--ok); animation: pulse-dot 1.8s ease-in-out infinite; }
+.quick-switcher-item-status--needs-input { background: var(--warn); animation: pulse-dot 1.8s ease-in-out infinite; }
 .quick-switcher-item-meta {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;

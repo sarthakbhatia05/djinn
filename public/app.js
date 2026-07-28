@@ -187,8 +187,15 @@
     renderBacklog();
   }
 
+  // 'needs-input' is still isRunning:true underneath — it's a running session
+  // whose transcript has sat on an unresolved tool_use long enough (see
+  // NEEDS_INPUT_STALE_MS in server/routes/sessions.js) that it reads as stuck
+  // rather than merely mid-tool-call. Most likely cause: a permission prompt
+  // this headless session has no way to answer, which otherwise hangs
+  // forever looking identical to an idle, finished session.
   function statusOf(session) {
-    return session.isRunning ? 'running' : 'idle';
+    if (!session.isRunning) return 'idle';
+    return session.needsInput ? 'needs-input' : 'running';
   }
 
   // ---------- seen/unseen tracking ----------
@@ -295,15 +302,21 @@
     card.addEventListener('click', () => openDetail(session.id));
   }
 
+  const STATUS_LABELS = { running: 'Running', 'needs-input': 'Needs input', idle: 'Idle' };
+
   function updateCardContent(card, session) {
     const status = statusOf(session);
     const dot = card.querySelector('.status-dot');
-    dot.classList.toggle('status-dot--pulse-fast', status === 'running');
+    // Still pulsing for needs-input — the process really is alive, just stuck
+    // — the warn color is what signals "look at this", not a stopped animation.
+    dot.classList.toggle('status-dot--pulse-fast', status === 'running' || status === 'needs-input');
+    dot.classList.toggle('status-dot--needs-input', status === 'needs-input');
 
     const label = card.querySelector('.card-status-label');
-    label.textContent = status === 'running' ? 'Running' : 'Idle';
+    label.textContent = STATUS_LABELS[status];
     label.classList.toggle('card-status-label--running', status === 'running');
-    label.classList.toggle('card-status-label--done', status !== 'running');
+    label.classList.toggle('card-status-label--needs-input', status === 'needs-input');
+    label.classList.toggle('card-status-label--done', status === 'idle');
 
     const unseenBadge = card.querySelector('.card-unseen-badge');
     if (unseenBadge) unseenBadge.classList.toggle('card-status-label--unseen', isSessionUnseen(session));
@@ -753,15 +766,25 @@
     const status = statusOf(session);
 
     const dot = document.getElementById('detail-status-dot');
-    if (dot) dot.classList.toggle('status-dot--pulse-fast', status === 'running');
+    if (dot) {
+      dot.classList.toggle('status-dot--pulse-fast', status === 'running' || status === 'needs-input');
+      dot.classList.toggle('status-dot--needs-input', status === 'needs-input');
+    }
 
     const label = document.getElementById('detail-status-label');
     if (label) {
-      label.textContent = status === 'running' ? 'Running' : 'Idle';
-      label.style.color = status === 'running' ? 'var(--accent)' : 'var(--text-faint)';
+      label.textContent = STATUS_LABELS[status];
+      label.style.color = status === 'needs-input' ? 'var(--warn)' : status === 'running' ? 'var(--accent)' : 'var(--text-faint)';
     }
 
-    setDetailComposerRunning(status === 'running');
+    // needs-input is still a live process — the composer stays in its
+    // "running" (Stop-button) state either way, just with a status line that
+    // says what it's actually waiting on.
+    setDetailComposerRunning(
+      status === 'running' || status === 'needs-input',
+      status === 'needs-input' ? 'waiting for input…' : null,
+      status === 'needs-input'
+    );
     renderMcpChip(session);
     // First measurement that can actually succeed: the drawer was display:none
     // when the composer was wired, so scrollHeight read 0 there and the height
@@ -1294,14 +1317,19 @@
   // message could be fired at a busy agent — which lands both sends on one entry
   // in claudeCli's running map, and the first to finish flips isRunning false
   // while the second is still going.
-  function setDetailComposerRunning(running, statusText) {
+  function setDetailComposerRunning(running, statusText, needsInput) {
     const composer = document.getElementById('detail-composer');
     const btn = document.getElementById('detail-send-btn');
     const status = document.getElementById('detail-composer-status');
     const text = document.getElementById('detail-composer-status-text');
+    const dot = status ? status.querySelector('.composer-status-dot') : null;
 
     if (composer) composer.classList.toggle('composer--running', running);
-    if (status) status.hidden = !running;
+    if (status) {
+      status.hidden = !running;
+      status.classList.toggle('composer-status--needs-input', !!needsInput);
+    }
+    if (dot) dot.classList.toggle('composer-status-dot--needs-input', !!needsInput);
     if (text && running) text.textContent = statusText || `${assistantName()} is working…`;
     if (btn) {
       btn.dataset.mode = running ? 'stop' : 'send';
@@ -2105,7 +2133,8 @@
       const titleRow = document.createElement('div');
       titleRow.className = 'quick-switcher-item-title';
       const dot = document.createElement('span');
-      dot.className = `quick-switcher-item-status${session.isRunning ? ' quick-switcher-item-status--running' : ''}`;
+      const qsStatus = statusOf(session);
+      dot.className = `quick-switcher-item-status${qsStatus !== 'idle' ? ` quick-switcher-item-status--${qsStatus}` : ''}`;
       titleRow.appendChild(dot);
       // Session title is user-supplied — a plain text node, never innerHTML.
       titleRow.appendChild(document.createTextNode(session.title || '(no summary yet)'));

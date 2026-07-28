@@ -13,7 +13,7 @@ Status: **working locally, MIT licensed, published to a private GitHub repo (`sa
 ```bash
 npm install
 npm start          # http://127.0.0.1:4317
-npm test           # 228 tests
+npm test           # 235 tests
 ```
 
 ## Critical conventions — read before editing

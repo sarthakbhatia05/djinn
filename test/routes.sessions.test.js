@@ -38,6 +38,7 @@ function makeDeps(overrides = {}) {
       listSessions: () => [{ id: 's1', projectPath: 'D:/demo', pathResolved: true, title: 'x', lastActivity: '2026-07-15T00:00:00.000Z' }],
       listProjects: () => [{ projectPath: 'D:/demo', projectFolder: 'D--demo', sessionCount: 1, lastActivity: '2026-07-15T00:00:00.000Z' }],
       readMessages: (id) => (id === 's1' ? [{ role: 'user', text: 'hi', timestamp: null }] : null),
+      getPendingToolUseSince: () => null,
     },
     claudeCli: {
       isRunning: () => false,
@@ -59,12 +60,88 @@ function makeDeps(overrides = {}) {
 test('GET /api/sessions merges isRunning from claudeCli', async () => {
   const deps = makeDeps({ claudeCli: { isRunning: () => true, startSession: async () => ({}), sendMessage: async () => ({}) } });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'GET', '/api/sessions');
-  assert.strictEqual(status, 200);
-  assert.strictEqual(body[0].id, 's1');
-  assert.strictEqual(body[0].isRunning, true);
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/sessions');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body[0].id, 's1');
+    assert.strictEqual(body[0].isRunning, true);
+    assert.strictEqual(body[0].needsInput, false, 'a running session with no reported pending tool use is not needsInput');
+  } finally {
+    server.close();
+  }
+});
+
+// needsInput is only ever computed for a session claudeCli reports as running
+// (an idle session cannot be "stuck"), and only trips once the transcript's
+// unresolved tool_use has sat long enough that it reads as stuck rather than
+// merely a normal in-flight tool call — see NEEDS_INPUT_STALE_MS in
+// server/routes/sessions.js.
+
+test('GET /api/sessions reports needsInput once a pending tool_use is older than the stale threshold', async () => {
+  const oldTimestamp = new Date(Date.now() - 60000).toISOString(); // well past 25s
+  const deps = makeDeps({
+    claudeCli: { isRunning: () => true, startSession: async () => ({}), sendMessage: async () => ({}) },
+    sessionStore: {
+      listSessions: () => [{ id: 's1', projectPath: 'D:/demo', pathResolved: true, title: 'x', lastActivity: '2026-07-15T00:00:00.000Z' }],
+      listProjects: () => [],
+      readMessages: () => null,
+      getPendingToolUseSince: () => oldTimestamp,
+    },
+  });
+  const server = createApp(deps).listen(0);
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'GET', '/api/sessions');
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body[0].isRunning, true, 'needsInput is additional to isRunning, not a replacement for it');
+    assert.strictEqual(body[0].needsInput, true);
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/sessions does not report needsInput for a tool_use pending less than the stale threshold', async () => {
+  const recentTimestamp = new Date(Date.now() - 2000).toISOString(); // 2s — an ordinary tool call
+  const deps = makeDeps({
+    claudeCli: { isRunning: () => true, startSession: async () => ({}), sendMessage: async () => ({}) },
+    sessionStore: {
+      listSessions: () => [{ id: 's1', projectPath: 'D:/demo', pathResolved: true, title: 'x', lastActivity: '2026-07-15T00:00:00.000Z' }],
+      listProjects: () => [],
+      readMessages: () => null,
+      getPendingToolUseSince: () => recentTimestamp,
+    },
+  });
+  const server = createApp(deps).listen(0);
+  try {
+    const { port } = server.address();
+    const { body } = await request(port, 'GET', '/api/sessions');
+    assert.strictEqual(body[0].needsInput, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/sessions never checks for a pending tool_use on an idle session', async () => {
+  let called = false;
+  const deps = makeDeps({
+    claudeCli: { isRunning: () => false, startSession: async () => ({}), sendMessage: async () => ({}) },
+    sessionStore: {
+      listSessions: () => [{ id: 's1', projectPath: 'D:/demo', pathResolved: true, title: 'x', lastActivity: '2026-07-15T00:00:00.000Z' }],
+      listProjects: () => [],
+      readMessages: () => null,
+      getPendingToolUseSince: () => { called = true; return new Date().toISOString(); },
+    },
+  });
+  const server = createApp(deps).listen(0);
+  try {
+    const { port } = server.address();
+    const { body } = await request(port, 'GET', '/api/sessions');
+    assert.strictEqual(body[0].needsInput, false);
+    assert.strictEqual(called, false, 'an idle session must not pay for a transcript tail-read it cannot need');
+  } finally {
+    server.close();
+  }
 });
 
 test('POST /api/sessions requires cwd and message', async () => {
