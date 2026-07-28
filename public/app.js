@@ -1493,15 +1493,17 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, ...currentModelAndPermissionFields() }),
       });
+      // 202 means accepted, not finished. The composer stays in its running
+      // state until a session-status push or the 10s poll says the run ended —
+      // releasing it here would re-enable Send while the agent is mid-run,
+      // which is exactly the double-send this state exists to prevent.
       await loadSessions();
-      if (state.activeDetailId === sessionId) await loadChatMessages(sessionId);
     } catch (err) {
       const errorMessage = err && err.message ? err.message : 'Failed to send the message';
       console.error('Failed to send message to session', err);
       showToast(errorMessage);
-    } finally {
+      // The run never started, so nothing will arrive to unlock the composer.
       setDetailComposerRunning(false);
-      // The session's real status wins over the optimistic clear above.
       updateOpenDetailIfPresent();
     }
   }
@@ -2539,6 +2541,9 @@
         return;
       }
       if (msg.type === 'session-status') {
+        loadSessions();
+      } else if (msg.type === 'session-error') {
+        showToast(msg.message || 'The agent run failed');
         loadSessions();
       } else if (msg.type === 'transcript-update' && msg.sessionId === state.activeDetailId) {
         loadChatMessages(msg.sessionId);
