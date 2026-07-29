@@ -902,8 +902,75 @@
     }
 
     stage.classList.toggle('pane-stage--empty', state.layout.panes.length === 0);
+    document.getElementById('stage-column').classList.toggle(
+      'stage-column--empty',
+      state.layout.panes.length === 0 && state.layout.minimized.length === 0
+    );
     document.querySelector('.main').classList.toggle('main--workbench', state.layout.panes.length >= 2);
     renderLayoutControl();
+    renderDock();
+    renderOpenPanesSection();
+  }
+
+  // Chips for every minimized pane, below the stage. Minimizing used to be a
+  // silent, unrecoverable close (Task 4) — this is the way back.
+  function renderDock() {
+    const dock = document.getElementById('dock');
+    const chips = document.getElementById('dock-chips');
+    dock.hidden = state.layout.minimized.length === 0;
+    chips.textContent = '';
+    for (const sessionId of state.layout.minimized) {
+      const session = state.sessions.find((s) => s.id === sessionId);
+      if (!session) continue;
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'dock-chip';
+      // Same two toggles updateCardContent uses. There is no
+      // .status-dot--running or .status-dot--idle class — running is expressed
+      // by the pulse animation and idle by the base style, so building a class
+      // name from statusOf() would emit two classes that style nothing.
+      const status = statusOf(session);
+      const dot = document.createElement('span');
+      dot.className = 'status-dot';
+      dot.classList.toggle('status-dot--pulse-fast', status === 'running' || status === 'needs-input');
+      dot.classList.toggle('status-dot--needs-input', status === 'needs-input');
+      chip.appendChild(dot);
+      const label = document.createElement('span');
+      // Session titles come from user prompts — textContent, never innerHTML.
+      label.textContent = session.title || '(no summary yet)';
+      chip.appendChild(label);
+      chip.addEventListener('click', () => {
+        setLayout(layoutStore.restorePane(state.layout, sessionId, { max: currentPaneCap() }));
+        loadChatMessages(sessionId);
+        watchSession(sessionId);
+      });
+      chips.appendChild(chip);
+    }
+  }
+
+  // Every open pane, listed in the sidebar, with the focused one marked —
+  // only shown once there's more than one, since a single open pane is
+  // already fully represented by the pane itself.
+  function renderOpenPanesSection() {
+    const label = document.getElementById('open-panes-label');
+    const list = document.getElementById('open-panes-list');
+    const ids = openSessionIds();
+    label.hidden = ids.length < 2;
+    list.textContent = '';
+    if (ids.length < 2) return;
+    for (const sessionId of ids) {
+      const session = state.sessions.find((s) => s.id === sessionId);
+      if (!session) continue;
+      const row = document.createElement('div');
+      row.className = 'row row--open';
+      row.classList.toggle('row--active', sessionId === state.layout.focusedId);
+      const title = document.createElement('div');
+      title.className = 'row-title';
+      title.textContent = session.title || '(no summary yet)';
+      row.appendChild(title);
+      row.addEventListener('click', () => setLayout(layoutStore.focusPane(state.layout, sessionId)));
+      list.appendChild(row);
+    }
   }
 
   // The glyph is the layout: one bar per open pane, so the control reports the
@@ -2845,6 +2912,16 @@
   }
 
   function showSessionsView() {
+    // Docking rather than closing: the user asked to see the dashboard, not to
+    // lose three transcripts. Every pane stays one click away in the dock.
+    if (state.layout.panes.length > 0) {
+      let next = state.layout;
+      for (const sessionId of openSessionIds()) {
+        unwatchSession(sessionId);
+        next = layoutStore.minimizePane(next, sessionId);
+      }
+      setLayout(next);
+    }
     for (const el of mainViewSections()) el.style.display = '';
     // The Load more row owns its own display (it's hidden once everything is
     // shown), so blanket-restoring above would resurrect a stale button.

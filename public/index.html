@@ -110,6 +110,9 @@
         <div class="row-title">Memory</div>
       </div>
 
+      <div class="eyebrow sidebar-label sidebar-label--projects" id="open-panes-label" hidden>Open panes</div>
+      <div id="open-panes-list"></div>
+
       <div class="eyebrow sidebar-label sidebar-label--projects">Projects</div>
       <div id="project-list"></div>
 
@@ -278,7 +281,16 @@
       <!-- Panes are cloned from this template, one per open session. Ids became
            classes because there can now be several of each on screen at once;
            everything else is the drawer markup unchanged. -->
-      <div class="pane-stage" id="pane-stage"></div>
+      <div class="stage-column" id="stage-column">
+        <div class="pane-stage" id="pane-stage"></div>
+
+        <!-- Minimized panes. Hidden entirely when nothing is minimized — an
+             always-present empty strip is chrome that reports nothing. -->
+        <div class="dock" id="dock" hidden>
+          <span class="eyebrow dock-label">Minimized</span>
+          <div class="dock-chips" id="dock-chips"></div>
+        </div>
+      </div>
 
       <template id="pane-template">
         <div class="pane">
@@ -293,11 +305,7 @@
               <div class="mono detail-meta"></div>
             </div>
             <div class="drawer-controls">
-              <!-- Hidden pending Task 7: minimizing removes the pane from the
-                   layout with no dock yet to restore it from, which would be a
-                   silent, unrecoverable "close" in disguise. Un-hide once the
-                   dock exists. -->
-              <button type="button" class="ghost drawer-ctl pane-minimize-btn" title="Minimize" aria-label="Minimize" hidden>—</button>
+              <button type="button" class="ghost drawer-ctl pane-minimize-btn" title="Minimize" aria-label="Minimize">—</button>
               <button type="button" class="ghost drawer-close pane-close-btn" title="Close" aria-label="Close">×</button>
             </div>
           </div>

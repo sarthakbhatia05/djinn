@@ -346,10 +346,16 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   background: var(--accent-soft);
   border-left: 2px solid var(--accent);
 }
+/* A 2px inset tick, not a border: the cue that says "this is on screen right
+   now" without spending a box on it. */
+.row--open { color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
 .row-title {
   flex: 1;
   font-size: 13.5px;
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .row-count {
   font-size: 11px;
@@ -826,15 +832,50 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
    360/0 shrink here, exactly mirroring the old .drawer, so the one reachable
    state is pixel-faithful; a later task's real multi-pane sizing replaces
    this fixed basis with something width-aware (see currentPaneCap). */
-.pane-stage { display: flex; flex: 0 0 360px; min-width: 0; }
+/* The 360px basis that used to live on .pane-stage now lives on the column
+   that wraps it and the dock (Task 7), since the dock needs to sit below the
+   stage rather than beside .main-content. .pane-stage fills the column's
+   vertical space instead; its own row-flex behaviour (panes + dividers) is
+   unchanged, and the .main--workbench override below still hands the freed
+   width to the panes once the dashboard hides at 2+ panes. */
+.stage-column { display: flex; flex-direction: column; flex: 0 0 360px; min-width: 0; }
+.main--workbench .stage-column { flex: 1; }
+/* Neither the stage nor the dock has anything to show — no panes, nothing
+   minimized — so the whole column collapses rather than reserving a blank
+   360px gutter next to the dashboard. */
+.stage-column--empty { display: none; }
+.pane-stage { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .pane-stage--empty { display: none; }
-/* At 2+ panes the dashboard hides (see .main--workbench .main-content below),
-   so the fixed 360px basis above no longer has anything to share the row
-   with — it would leave the freed width empty instead of handing it to the
-   panes. This override only applies once .main--workbench is set, so the
-   single-pane case above (still required to be pixel-identical to the old
-   360px drawer) is untouched. */
-.main--workbench .pane-stage { flex: 1; }
+
+.dock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.dock-label { flex-shrink: 0; }
+.dock-chips { display: flex; gap: 8px; overflow-x: auto; }
+.dock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dock-chip:hover { border-color: var(--text-faint); color: var(--text); }
 
 .divider {
   width: 1px;
@@ -871,6 +912,21 @@ body.is-dragging-divider { user-select: none; cursor: col-resize; }
 }
 .pane--focus { background: var(--surface); }
 .pane-header-text { min-width: 0; }
+
+/* The activity spine: a 2px hairline across the top of every pane, colored by
+   that agent's real state. N panes give N segments, so the state of the whole
+   workbench reads off the top edge without reading a word — which is the
+   supervision case this feature exists for. */
+.pane-spine { height: 2px; flex-shrink: 0; background: var(--border); }
+.pane-spine--running {
+  background-image: linear-gradient(90deg, var(--accent-soft) 0%, var(--accent) 45%, var(--accent-soft) 90%);
+  background-size: 220px 100%;
+  animation: spine-sweep 2.4s linear infinite;
+}
+.pane-spine--needs-input { background: var(--warn); animation: pulse-dot 1.4s ease-in-out infinite; }
+.pane-spine--idle { background: var(--border); }
+
+@keyframes spine-sweep { from { background-position: 0 0; } to { background-position: 220px 0; } }
 
 .drawer-header {
   padding: 15px 17px;
