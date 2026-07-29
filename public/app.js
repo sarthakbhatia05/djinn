@@ -884,8 +884,73 @@
       if (session) renderDetail(el, session);
     }
 
+    for (const el of Array.from(stage.querySelectorAll('.divider'))) el.remove();
+    const panes = Array.from(stage.querySelectorAll('.pane'));
+    for (let i = 1; i < panes.length; i += 1) {
+      const divider = document.createElement('div');
+      divider.className = 'divider';
+      divider.dataset.left = panes[i - 1].dataset.sessionId;
+      divider.dataset.right = panes[i].dataset.sessionId;
+      stage.insertBefore(divider, panes[i]);
+    }
+
     stage.classList.toggle('pane-stage--empty', state.layout.panes.length === 0);
     document.querySelector('.main').classList.toggle('main--workbench', state.layout.panes.length >= 2);
+  }
+
+  // A pane stops being readable below this. The drag clamps both neighbours
+  // rather than letting one collapse — a 40px pane is never something the user
+  // meant to create, and getting back out of one is fiddly.
+  const MIN_PANE_PX = 260;
+
+  function wireDividerDrag() {
+    const stage = document.getElementById('pane-stage');
+    stage.addEventListener('mousedown', (e) => {
+      const divider = e.target.closest('.divider');
+      if (!divider) return;
+      e.preventDefault();
+      const leftEl = paneFor(divider.dataset.left);
+      const rightEl = paneFor(divider.dataset.right);
+      if (!leftEl || !rightEl) return;
+
+      const startX = e.clientX;
+      const leftPx = leftEl.getBoundingClientRect().width;
+      const rightPx = rightEl.getBoundingClientRect().width;
+      const totalPx = leftPx + rightPx;
+      // Conserve the pair's combined flex so the drag never changes how much
+      // room the two of them take from the panes beyond them.
+      const leftFlex = state.layout.panes.find((p) => p.sessionId === divider.dataset.left).flex;
+      const rightFlex = state.layout.panes.find((p) => p.sessionId === divider.dataset.right).flex;
+      const totalFlex = leftFlex + rightFlex;
+
+      document.body.classList.add('is-dragging-divider');
+
+      function onMove(ev) {
+        let px = leftPx + (ev.clientX - startX);
+        px = Math.max(MIN_PANE_PX, Math.min(totalPx - MIN_PANE_PX, px));
+        const ratio = px / totalPx;
+        // Applied straight to the DOM during the drag; the model is updated
+        // once on mouseup, so a drag is one layout write and one localStorage
+        // write rather than one per mousemove.
+        leftEl.style.flex = `${totalFlex * ratio} 1 0`;
+        rightEl.style.flex = `${totalFlex * (1 - ratio)} 1 0`;
+      }
+
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('is-dragging-divider');
+        const ratio = leftEl.getBoundingClientRect().width / totalPx;
+        setLayout(layoutStore.resizePane(
+          state.layout,
+          divider.dataset.left, totalFlex * ratio,
+          divider.dataset.right, totalFlex * (1 - ratio)
+        ));
+      }
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
   }
 
   function renderDetail(paneEl, session) {
@@ -3169,6 +3234,7 @@
 
     // Panes are wired individually as they're cloned from the template — see
     // wirePane, called from renderPanes. Nothing detail-* remains here.
+    wireDividerDrag();
 
     // Model / permission-mode selectors: same preference mirrored in both the
     // command bar and the drawer footer.

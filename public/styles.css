@@ -811,6 +811,38 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
    this fixed basis with something width-aware (see currentPaneCap). */
 .pane-stage { display: flex; flex: 0 0 360px; min-width: 0; }
 .pane-stage--empty { display: none; }
+/* At 2+ panes the dashboard hides (see .main--workbench .main-content below),
+   so the fixed 360px basis above no longer has anything to share the row
+   with — it would leave the freed width empty instead of handing it to the
+   panes. This override only applies once .main--workbench is set, so the
+   single-pane case above (still required to be pixel-identical to the old
+   360px drawer) is untouched. */
+.main--workbench .pane-stage { flex: 1; }
+
+.divider {
+  width: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+  position: relative;
+  cursor: col-resize;
+}
+.divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 7px;
+}
+.divider:hover { background: var(--accent); }
+/* A drag that crosses a transcript would otherwise select text in it, and the
+   I-beam cursor would fight the col-resize one. */
+body.is-dragging-divider { user-select: none; cursor: col-resize; }
+
+/* One pane keeps the dashboard visible beside it, exactly as the drawer did.
+   Two or more means the user is working across sessions, so the panes take the
+   room and "All sessions" in the sidebar brings the dashboard back. */
+.main--workbench .main-content { display: none; }
 .pane {
   position: relative;
   min-width: 0;
