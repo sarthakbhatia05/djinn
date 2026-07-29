@@ -172,3 +172,19 @@ if (typeof module !== 'undefined' && module.exports) {
     hydrate,
   };
 }
+
+if (typeof window !== 'undefined') {
+  window.layoutStore = {
+    MAX_PANES,
+    createLayout,
+    addPane,
+    replaceFocused,
+    closePane,
+    focusPane,
+    resizePane,
+    minimizePane,
+    restorePane,
+    serialize,
+    hydrate,
+  };
+}

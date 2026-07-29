@@ -798,33 +798,31 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   border-color: var(--border);
 }
 
-.drawer {
+/* Deviation from the plan brief's literal Step 10 CSS: the brief specifies
+   `flex: 1` here, which is correct for the eventual multi-pane layout but,
+   for THIS task — where exactly zero or one pane is ever reachable, since no
+   shipped code path passes mode:'split' yet — makes a single open pane split
+   the row roughly 50/50 with .main-content instead of matching the old
+   .drawer's fixed 360px. That is a visible regression against this task's
+   explicit "looks identical to today" requirement, confirmed by measuring:
+   at a 1400px viewport this pane rendered at 558px instead of 360px. Fixed at
+   360/0 shrink here, exactly mirroring the old .drawer, so the one reachable
+   state is pixel-faithful; a later task's real multi-pane sizing replaces
+   this fixed basis with something width-aware (see currentPaneCap). */
+.pane-stage { display: flex; flex: 0 0 360px; min-width: 0; }
+.pane-stage--empty { display: none; }
+.pane {
   position: relative;
-  width: 360px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--border);
-  background: var(--surface);
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
 }
+.pane--focus { background: var(--surface); }
+.pane-header-text { min-width: 0; }
 
-/* Free-drag resize handle on the drawer's left edge. Only meaningful at
-   normal/wide width — at full width there's nothing to drag against, and a
-   minimized drawer has no body to resize. */
-.drawer-resize-handle {
-  position: absolute;
-  top: 0;
-  left: -3px;
-  width: 7px;
-  height: 100%;
-  cursor: ew-resize;
-  z-index: 6;
-}
-.drawer--full .drawer-resize-handle,
-.drawer--min .drawer-resize-handle {
-  display: none;
-}
 .drawer-header {
   padding: 15px 17px;
   border-bottom: 1px solid var(--border-soft);
@@ -862,7 +860,7 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   flex: 1;
   /* Without this the flex default of min-height:auto refuses to shrink the
      body below its content, so a long transcript grows the drawer past the
-     viewport and gets clipped by .drawer's overflow:hidden instead of
+     viewport and gets clipped by .pane's overflow:hidden instead of
      scrolling. This one line is what gives the chat a real scrollbar. */
   min-height: 0;
   overflow-y: auto;
@@ -895,27 +893,6 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .drawer-ctl:hover,
 .drawer-close:hover { color: var(--text); background: var(--surface-2); }
 
-/* Deliberately not transitioned. Animating width on a flex item reflows the
-   sibling .main-content — and its whole session grid — on every frame, which
-   is both expensive and unreliable; the transition was observed sticking at
-   currentTime 0 and pinning the drawer at its start width. Resizing is instant. */
-/* max() so "wide" can never come out narrower than the normal 360px: on a
-   narrow window 60% resolves to less than that, and the widen button would
-   visibly shrink the panel. */
-.drawer--wide { width: max(360px, 60%); }
-.drawer--full { width: 100%; }
-.main--drawer-full .main-content { display: none; }
-
-.drawer--min { align-self: flex-start; width: 360px; }
-.drawer--min .drawer-body,
-.drawer--min .drawer-footer { display: none; }
-.drawer--min .drawer-header { border-bottom: none; }
-.drawer--min .detail-title {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 250px;
-}
 .plan-eyebrow {
   margin-bottom: 10px;
 }
@@ -1931,8 +1908,12 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
    and overlays it instead); this file deliberately stops at one.
 
    Nothing here adds a border, a box or a divider to hold the collapsed state
-   together — the rail is the same list with its labels removed. .drawer,
-   .drawer--wide, .drawer--full and .main--drawer-full are untouched. */
+   together — the rail is the same list with its labels removed. .pane and
+   .pane-stage are untouched.
+
+   Note: the 360px line item below predates the pane-stage refactor (a pane
+   now sizes by flex rather than a fixed width) and is not recomputed here —
+   that's pane-sizing work for a later task, not this one. */
 @media (max-width: 871px) {
   .sidebar {
     width: 56px;
