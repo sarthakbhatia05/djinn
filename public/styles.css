@@ -599,6 +599,23 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   align-items: center;
   justify-content: space-between;
 }
+.card-top-right { display: flex; align-items: center; gap: 6px; }
+.card-split-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.card:hover .card-split-btn { opacity: 1; }
+.card-split-btn:hover { background: var(--hover); color: var(--text); }
+/* Keyboard users never trigger :hover, so the button would be unreachable. */
+.card-split-btn:focus-visible { opacity: 1; }
 .card-status {
   display: flex;
   align-items: center;
@@ -1514,6 +1531,24 @@ body.is-dragging-divider { user-select: none; cursor: col-resize; }
 .projects-btn { cursor: pointer; }
 .projects-btn:hover { border-color: var(--accent); color: var(--text); }
 .projects-btn-hint { font-size: 10px; color: var(--accent); }
+
+.layout-ctl[hidden] { display: none; }
+.layout-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 7px;
+  padding: 5px 9px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.layout-ctl:hover { border-color: var(--text-faint); color: var(--text); }
+.layout-glyph { display: inline-flex; gap: 2px; }
+.layout-glyph i { display: block; width: 4px; height: 12px; background: var(--text-faint); border-radius: 1px; }
+.layout-ctl:hover .layout-glyph i { background: var(--accent); }
 
 /* ---------- Onboarding ---------- */
 

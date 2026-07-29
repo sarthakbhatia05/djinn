@@ -325,14 +325,21 @@
           <span class="eyebrow card-status-label"></span>
           <span class="card-unseen-badge" title="New activity since you last opened this"></span>
         </div>
-        <span class="dotnum card-time"></span>
+        <div class="card-top-right">
+          <button type="button" class="card-split-btn" title="Open in a new pane" aria-label="Open in a new pane">⊞</button>
+          <span class="dotnum card-time"></span>
+        </div>
       </div>
       <div class="card-title"></div>
       <div class="card-meta mono">
         <span class="card-meta-path"></span>
       </div>
     `;
-    card.addEventListener('click', () => openDetail(session.id));
+    card.addEventListener('click', (e) => openDetail(session.id, e.shiftKey ? 'split' : 'replace'));
+    card.querySelector('.card-split-btn').addEventListener('click', (e) => {
+      e.stopPropagation(); // the card's own handler would replace instead
+      openDetail(session.id, 'split');
+    });
   }
 
   const STATUS_LABELS = { running: 'Running', 'needs-input': 'Needs input', idle: 'Idle' };
@@ -896,6 +903,19 @@
 
     stage.classList.toggle('pane-stage--empty', state.layout.panes.length === 0);
     document.querySelector('.main').classList.toggle('main--workbench', state.layout.panes.length >= 2);
+    renderLayoutControl();
+  }
+
+  // The glyph is the layout: one bar per open pane, so the control reports the
+  // split rather than just naming it.
+  function renderLayoutControl() {
+    const ctl = document.getElementById('layout-ctl');
+    const count = state.layout.panes.length;
+    ctl.hidden = count < 2;
+    const glyph = document.getElementById('layout-glyph');
+    glyph.textContent = '';
+    for (let i = 0; i < count; i += 1) glyph.appendChild(document.createElement('i'));
+    document.getElementById('layout-ctl-label').textContent = `${count} panes`;
   }
 
   // A pane stops being readable below this. The drag clamps both neighbours
@@ -2357,11 +2377,11 @@
     renderQuickSwitcherResults();
   }
 
-  function selectQuickSwitcherItem(idx) {
+  function selectQuickSwitcherItem(idx, mode) {
     const session = quickSwitcherState.items[idx];
     if (!session) return;
     closeQuickSwitcher();
-    openDetail(session.id); // same function the session cards use
+    openDetail(session.id, mode); // same function the session cards use
   }
 
   function wireQuickSwitcher() {
@@ -2377,13 +2397,25 @@
     input.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown') { e.preventDefault(); moveQuickSwitcherActive(1); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); moveQuickSwitcherActive(-1); }
-      else if (e.key === 'Enter') { e.preventDefault(); selectQuickSwitcherItem(quickSwitcherState.activeIndex); }
+      else if (e.key === 'Enter') { e.preventDefault(); selectQuickSwitcherItem(quickSwitcherState.activeIndex, e.shiftKey ? 'split' : 'replace'); }
       // Escape is handled by the document-level handler below.
     });
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) closeQuickSwitcher();
     });
     document.addEventListener('keydown', (e) => {
+      // Ctrl rather than Cmd/Meta: on macOS Cmd+1..9 is the browser's own tab
+      // switcher and cannot be taken. Ctrl+N is free in both.
+      if (e.ctrlKey && !e.metaKey && !e.altKey && e.key >= '1' && e.key <= '4') {
+        const pane = state.layout.panes[Number(e.key) - 1];
+        if (pane) {
+          e.preventDefault();
+          setLayout(layoutStore.focusPane(state.layout, pane.sessionId));
+          const input = paneFor(pane.sessionId).querySelector('.pane-send-input');
+          if (input) input.focus();
+        }
+        return;
+      }
       const key = e.key ? e.key.toLowerCase() : '';
       if ((e.metaKey || e.ctrlKey) && key === 'k') {
         e.preventDefault();
@@ -3235,6 +3267,13 @@
     // Panes are wired individually as they're cloned from the template — see
     // wirePane, called from renderPanes. Nothing detail-* remains here.
     wireDividerDrag();
+    document.getElementById('layout-ctl').addEventListener('click', () => {
+      let next = state.layout;
+      for (let i = 1; i < next.panes.length; i += 1) {
+        next = layoutStore.resizePane(next, next.panes[i - 1].sessionId, 1, next.panes[i].sessionId, 1);
+      }
+      setLayout(next);
+    });
 
     // Model / permission-mode selectors: same preference mirrored in both the
     // command bar and the drawer footer.
