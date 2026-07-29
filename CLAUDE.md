@@ -13,7 +13,7 @@ Status: **working locally, MIT licensed, published to a private GitHub repo (`sa
 ```bash
 npm install
 npm start          # http://127.0.0.1:4317
-npm test           # 235 tests
+npm test           # 257 tests
 ```
 
 ## Critical conventions — read before editing
@@ -32,6 +32,8 @@ npm test           # 235 tests
 
 **No user-visible string says "Claude".** The user named their assistant during onboarding, and every message about it goes through the `assistantName()` helper in `public/app.js` (falls back to `"Assistant"` when unset). Hardcoding "Claude" in a toast, empty state, or status label breaks that illusion. Naming the `claude` CLI as the underlying engine is fine — that's a fact about the tool, not the persona.
 
+**`POST /:id/message` returns 202 and dispatches fire-and-forget.** It used to `await` the run and respond when it finished, but `--print` can block for minutes, and awaiting held one open HTTP connection per active session against the browser's ~6-per-origin limit — with a few panes running at once, further sends and even unrelated fetches queued behind them. The route now fires `claudeCli.sendMessage` without awaiting it, responds `202` immediately, and reports a later failure by broadcasting a `session-error` WebSocket message instead of an HTTP error body. Do not "simplify" this back to `await`-ing the send.
+
 ## Architecture
 
 ```
@@ -48,7 +50,7 @@ Browser (public/)  <-- HTTP + WebSocket -->  Local server (server/)
   - Claude Code integration: `pathEncoding` (folder-name encoding), `sessionStore` (transcript scanning), `claudeCli` (process spawning), `claudeUserConfig` (read-only `~/.claude.json` access), `transcriptWatcher` (`fs.watch` + throttle, pushes chat updates over the WebSocket), `slashCommands`, `mcpStatus`.
   - Pickers and plumbing: `folderPicker`, `filePicker` (the `@` file picker), `asyncHandler` (the one place route errors are turned into responses — wrap every async handler in it).
 - `server/routes/` — thin HTTP wrappers over the stores, one file per resource: `sessions`, `backlog`, `memory`, `settings`, `projects`, `directories`, `commands`, `mcp`, `claudeConfig`.
-- `public/` — `index.html` (shell), `styles.css` (design tokens + the CSS-only orb), `format.js` and `sessionSelect.js` (both shared with Node tests via a guarded export), `app.js` (all behavior).
+- `public/` — `index.html` (shell), `styles.css` (design tokens + the CSS-only orb), `format.js`, `sessionSelect.js` and `layoutStore.js` (all three shared with Node tests via a guarded export), `app.js` (all behavior).
 - `data/` — gitignored runtime state. Never commit it; it holds the user's real backlog, memory, and settings.
 
 ## Domain gotchas (each cost real debugging time)
