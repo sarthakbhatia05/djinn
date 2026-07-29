@@ -40,10 +40,47 @@
     persistLayout();
   }
 
-  // Provisional cap: Task 8 makes this width-aware.
+  // Derived, not picked. A chat pane stops being readable below 320px and the
+  // sidebar takes 224, so:
+  //   224 + 4*320 + 3 dividers = 1507
+  //   224 + 3*320 + 2 dividers = 1186
+  //   224 + 2*320 + 1 divider  =  865
+  // Below 865 the existing 871px breakpoint has already collapsed the sidebar
+  // to a 56px rail, and a single pane is all that fits regardless.
+  const PANE_CAP_STEPS = [
+    { minWidth: 1507, cap: 4 },
+    { minWidth: 1186, cap: 3 },
+    { minWidth: 865, cap: 2 },
+  ];
+
   function currentPaneCap() {
-    return layoutStore.MAX_PANES;
+    const width = window.innerWidth;
+    for (const step of PANE_CAP_STEPS) {
+      if (width >= step.minWidth) return step.cap;
+    }
+    return 1;
   }
+
+  // Narrowing the window must not leave panes rendered below the readable
+  // floor. Panes are closed from the right, and the focused one is kept
+  // whatever its position — losing the pane you are typing in because you
+  // resized the window would be indefensible.
+  let paneCapResizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(paneCapResizeTimer);
+    paneCapResizeTimer = setTimeout(() => {
+      const cap = currentPaneCap();
+      if (state.layout.panes.length <= cap) return;
+      let next = state.layout;
+      while (next.panes.length > cap) {
+        const victim = next.panes.slice().reverse().find((p) => p.sessionId !== next.focusedId);
+        if (!victim) break;
+        unwatchSession(victim.sessionId);
+        next = layoutStore.minimizePane(next, victim.sessionId);
+      }
+      setLayout(next);
+    }, 150);
+  });
 
   // ---------- assistant identity + tracked projects ----------
 
