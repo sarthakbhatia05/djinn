@@ -798,10 +798,21 @@
   function openDetail(sessionId, mode) {
     const session = state.sessions.find((s) => s.id === sessionId);
     if (!session) return;
-    const wasOpen = openSessionIds().includes(sessionId);
+    const before = openSessionIds(); // captured before setLayout mutates state.layout
+    const wasOpen = before.includes(sessionId);
     setLayout(mode === 'split'
       ? layoutStore.addPane(state.layout, sessionId, { max: currentPaneCap() })
       : layoutStore.replaceFocused(state.layout, sessionId));
+    // 'replace' mode (a plain card click) can knock a different session out of
+    // the layout without ever calling closeDetail on it. Its server-side
+    // fs.watch (transcriptWatcher.js) survives until an explicit unwatch or
+    // the whole connection drops, so leaving this out would leak one live
+    // watcher per session clicked through in a single pane over the life of
+    // the WebSocket connection.
+    const after = new Set(openSessionIds());
+    for (const id of before) {
+      if (!after.has(id)) unwatchSession(id);
+    }
     markSessionViewed(sessionId);
     clearUnseenBadge(sessionId);
     if (!wasOpen) {

@@ -867,12 +867,9 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   padding: 16px 17px;
 }
 
-/* ---------- drawer sizing ----------
-   The size button cycles width through normal → wide → full. Full works by
-   letting the drawer take the whole row: .main-content is flex:1 with
-   min-width:0, so it collapses to zero rather than overflowing. Minimize is
-   an independent toggle that hides everything but the header and lets the
-   drawer shrink to that height, leaving a small card in the corner. */
+/* The old drawer's size-cycle and minimize-to-strip behavior lived here; both
+   are gone with the singleton drawer. .pane-minimize-btn is hidden (see the
+   template) until Task 7's dock gives minimize somewhere to restore from. */
 .drawer-controls {
   display: flex;
   align-items: center;

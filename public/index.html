@@ -289,7 +289,11 @@
               <div class="mono detail-meta"></div>
             </div>
             <div class="drawer-controls">
-              <button type="button" class="ghost drawer-ctl pane-minimize-btn" title="Minimize" aria-label="Minimize">—</button>
+              <!-- Hidden pending Task 7: minimizing removes the pane from the
+                   layout with no dock yet to restore it from, which would be a
+                   silent, unrecoverable "close" in disguise. Un-hide once the
+                   dock exists. -->
+              <button type="button" class="ghost drawer-ctl pane-minimize-btn" title="Minimize" aria-label="Minimize" hidden>—</button>
               <button type="button" class="ghost drawer-close pane-close-btn" title="Close" aria-label="Close">×</button>
             </div>
           </div>
