@@ -863,7 +863,9 @@
       loadChatMessages(sessionId);
       watchSession(sessionId);
     }
-    syncActiveCards();
+    // syncActiveCards() runs inside renderPanes now (setLayout always calls
+    // it), so every setLayout caller gets it for free — see setLayout's
+    // comment about being the one place a transition can't be half-applied.
   }
 
   function closeDetail(sessionId) {
@@ -872,7 +874,6 @@
     unwatchSession(id);
     setLayout(layoutStore.closePane(state.layout, id));
     closeSlashPopup();
-    syncActiveCards();
   }
 
   // Pulled out of the old openDetail body: the unseen badge has to clear now,
@@ -904,8 +905,23 @@
     const wanted = openSessionIds();
 
     for (const el of Array.from(stage.querySelectorAll('.pane'))) {
-      if (!wanted.includes(el.dataset.sessionId)) el.remove();
+      if (!wanted.includes(el.dataset.sessionId)) {
+        // Closing/minimizing a pane mid-generation must not leak the ~120ms
+        // setInterval a generating indicator holds — stop it the same way
+        // syncChatGeneratingIndicator does when generation ends normally,
+        // before the row (and its textEl key) is torn down with the pane.
+        const row = el.querySelector('.pane-chat-history .chat-generating-indicator');
+        if (row) stopWorkingAnimation(row.querySelector('.chat-msg'));
+        el.remove();
+      }
     }
+
+    // Dividers are removed before the reorder loop below, not after: if they
+    // ran after, `previous.nextSibling` for any pane past the first would
+    // still resolve to a leftover divider rather than the next pane, making
+    // insertBefore's target differ from the pane's real position and forcing
+    // a real DOM move (and a stolen composer focus) on every render.
+    for (const el of Array.from(stage.querySelectorAll('.divider'))) el.remove();
 
     let previous = null;
     for (const pane of state.layout.panes) {
@@ -919,16 +935,18 @@
       }
       el.style.flex = `${pane.flex} 1 0`;
       el.classList.toggle('pane--focus', pane.sessionId === state.layout.focusedId);
-      // insertBefore with the node already in place is a no-op, so this both
-      // inserts new panes in order and reorders survivors.
-      stage.insertBefore(el, previous ? previous.nextSibling : stage.firstChild);
+      // insertBefore with the node already at the target position is a
+      // no-op; skip the call entirely rather than relying on that, so a
+      // pane already in place is never removed-and-reinserted by the DOM
+      // (which would steal focus from a mid-typing composer).
+      const ref = previous ? previous.nextSibling : stage.firstChild;
+      if (el !== ref) stage.insertBefore(el, ref);
       previous = el;
 
       const session = state.sessions.find((s) => s.id === pane.sessionId);
       if (session) renderDetail(el, session);
     }
 
-    for (const el of Array.from(stage.querySelectorAll('.divider'))) el.remove();
     const panes = Array.from(stage.querySelectorAll('.pane'));
     for (let i = 1; i < panes.length; i += 1) {
       const divider = document.createElement('div');
@@ -938,6 +956,7 @@
       stage.insertBefore(divider, panes[i]);
     }
 
+    syncActiveCards();
     stage.classList.toggle('pane-stage--empty', state.layout.panes.length === 0);
     document.getElementById('stage-column').classList.toggle(
       'stage-column--empty',
@@ -977,7 +996,17 @@
       label.textContent = session.title || '(no summary yet)';
       chip.appendChild(label);
       chip.addEventListener('click', () => {
+        // restorePane is addPane, which at the cap replaces the focused pane
+        // in place: the displaced session drops out of layout.panes without
+        // being added back to layout.minimized and without being unwatched.
+        // Same before/after diff openDetail uses for the identical eviction
+        // case, so whatever gets bumped here is correctly unwatched too.
+        const before = openSessionIds();
         setLayout(layoutStore.restorePane(state.layout, sessionId, { max: currentPaneCap() }));
+        const after = new Set(openSessionIds());
+        for (const id of before) {
+          if (!after.has(id)) unwatchSession(id);
+        }
         loadChatMessages(sessionId);
         watchSession(sessionId);
       });
@@ -2932,6 +2961,22 @@
 
   // ---------- sidebar view switching (All sessions <-> Memory) ----------
 
+  // Docks every open pane rather than closing it: `.main--workbench` (set
+  // whenever 2+ panes are open) hides `.main-content` entirely, and both
+  // `#memory-panel` and the dashboard sections below live inside it. Getting
+  // to either view means clearing the workbench state first, but the user
+  // asked to change views, not to lose their transcripts — every pane stays
+  // one click away in the dock.
+  function dockAllPanes() {
+    if (state.layout.panes.length === 0) return;
+    let next = state.layout;
+    for (const sessionId of openSessionIds()) {
+      unwatchSession(sessionId);
+      next = layoutStore.minimizePane(next, sessionId);
+    }
+    setLayout(next);
+  }
+
   function mainViewSections() {
     return [
       document.querySelector('.hero-orb-wrap'),
@@ -2949,16 +2994,7 @@
   }
 
   function showSessionsView() {
-    // Docking rather than closing: the user asked to see the dashboard, not to
-    // lose three transcripts. Every pane stays one click away in the dock.
-    if (state.layout.panes.length > 0) {
-      let next = state.layout;
-      for (const sessionId of openSessionIds()) {
-        unwatchSession(sessionId);
-        next = layoutStore.minimizePane(next, sessionId);
-      }
-      setLayout(next);
-    }
+    dockAllPanes();
     for (const el of mainViewSections()) el.style.display = '';
     // The Load more row owns its own display (it's hidden once everything is
     // shown), so blanket-restoring above would resurrect a stale button.
@@ -2969,6 +3005,11 @@
   }
 
   function showMemoryView() {
+    // #memory-panel lives inside .main-content, which .main--workbench hides
+    // outright once 2+ panes are open (see dockAllPanes above) — without
+    // this, setting #memory-panel's own display never mattered because its
+    // hidden ancestor still won.
+    dockAllPanes();
     for (const el of mainViewSections()) el.style.display = 'none';
     document.getElementById('memory-panel').style.display = 'block';
     document.getElementById('memory-row').classList.add('row--active');
@@ -3409,10 +3450,9 @@
       try { rawLayout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null'); } catch { rawLayout = null; }
       setLayout(layoutStore.hydrate(rawLayout, state.sessions.map((s) => s.id), { max: currentPaneCap() }));
       for (const id of openSessionIds()) { loadChatMessages(id); watchSession(id); }
-      // renderSessions() already ran inside loadSessions() above, before this
-      // hydrate — the card grid needs one more pass so the restored pane's
-      // card shows active immediately rather than waiting for the next poll.
-      syncActiveCards();
+      // No extra syncActiveCards() pass needed here: setLayout above already
+      // ran renderPanes(), which syncs the card grid (built moments earlier
+      // by loadSessions()) against the just-hydrated layout.
 
       loadProjects();
       loadBacklog();

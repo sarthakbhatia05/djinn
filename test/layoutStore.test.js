@@ -35,6 +35,20 @@ test('addPane at the cap replaces the focused pane rather than refusing', () => 
   assert.strictEqual(layout.focusedId, 'e', 'the session the user asked for is the one they get');
 });
 
+test('addPane at the cap drops the displaced session rather than parking it in minimized', () => {
+  // Locks in the contract a caller must handle itself: at the cap, addPane
+  // silently evicts the replaced pane from `panes` without ever adding it to
+  // `minimized` (or unwatching it — that's the caller's job, done by the
+  // before/after diff in openDetail and the dock chip's click handler).
+  let layout = L.createLayout();
+  for (const id of ['a', 'b', 'c', 'd']) layout = L.addPane(layout, id);
+  layout = L.focusPane(layout, 'b');
+  layout = L.addPane(layout, 'e');
+  assert.deepStrictEqual(layout.panes.map((p) => p.sessionId), ['a', 'e', 'c', 'd']);
+  assert.ok(!layout.panes.some((p) => p.sessionId === 'b'), 'b was displaced out of panes');
+  assert.deepStrictEqual(layout.minimized, [], 'b was NOT parked in minimized — the caller must handle it');
+});
+
 test('addPane honours an explicit lower cap', () => {
   let layout = L.addPane(L.addPane(L.createLayout(), 'a'), 'b');
   layout = L.addPane(layout, 'c', { max: 2 });
