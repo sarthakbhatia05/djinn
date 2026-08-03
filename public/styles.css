@@ -607,21 +607,24 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 }
 .card-top-right { display: flex; align-items: center; gap: 6px; }
 .card-split-btn {
-  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
   background: transparent;
-  color: var(--text-faint);
+  color: var(--text-muted);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
-  padding: 3px 5px;
-  border-radius: 4px;
-  opacity: 0;
-  transition: opacity .15s ease;
+  padding: 4px 7px;
+  border-radius: 5px;
+  white-space: nowrap;
 }
-.card:hover .card-split-btn { opacity: 1; }
-.card-split-btn:hover { background: var(--hover); color: var(--text); }
-/* Keyboard users never trigger :hover, so the button would be unreachable. */
-.card-split-btn:focus-visible { opacity: 1; }
+.card-split-btn:hover, .card-split-btn:focus-visible {
+  background: var(--hover);
+  color: var(--text);
+  border-color: var(--text-faint);
+}
 .card-status {
   display: flex;
   align-items: center;

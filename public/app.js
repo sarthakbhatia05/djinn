@@ -363,7 +363,7 @@
           <span class="card-unseen-badge" title="New activity since you last opened this"></span>
         </div>
         <div class="card-top-right">
-          <button type="button" class="card-split-btn" title="Open in a new pane" aria-label="Open in a new pane">⊞</button>
+          <button type="button" class="card-split-btn" title="Open alongside your other open sessions, instead of replacing them" aria-label="Open in a new pane">⊞ Split</button>
           <span class="dotnum card-time"></span>
         </div>
       </div>
