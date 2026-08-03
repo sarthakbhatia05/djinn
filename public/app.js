@@ -5,14 +5,82 @@
     projects: [],
     backlog: [],
     recentDirs: [],
-    activeDetailId: null,
+    layout: layoutStore.createLayout(),
     selectedDirectory: null,
     activeCount: 0,
     settings: null,
-    drawerSize: readDrawerSize(), // function declarations hoist, so this is fine
-    drawerMinimized: false,
-    drawerWidthPx: readDrawerWidthPx(),
   };
+
+  const LAYOUT_KEY = 'djinn.layout';
+
+  function focusedSessionId() {
+    return state.layout.focusedId;
+  }
+
+  function openSessionIds() {
+    return state.layout.panes.map((p) => p.sessionId);
+  }
+
+  function paneFor(sessionId) {
+    return document.querySelector(`.pane[data-session-id="${CSS.escape(sessionId)}"]`);
+  }
+
+  function persistLayout() {
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(layoutStore.serialize(state.layout)));
+    } catch { /* private mode / storage disabled — layout is a convenience */ }
+  }
+
+  // Applies a layout transition, re-renders, and persists in one place, so no
+  // caller can update the model and forget to do the other two.
+  function setLayout(next) {
+    if (next === state.layout) return;
+    state.layout = next;
+    renderPanes();
+    persistLayout();
+  }
+
+  // Derived, not picked. A chat pane stops being readable below 320px and the
+  // sidebar takes 224, so:
+  //   224 + 4*320 + 3 dividers = 1507
+  //   224 + 3*320 + 2 dividers = 1186
+  //   224 + 2*320 + 1 divider  =  865
+  // Below 865 the existing 871px breakpoint has already collapsed the sidebar
+  // to a 56px rail, and a single pane is all that fits regardless.
+  const PANE_CAP_STEPS = [
+    { minWidth: 1507, cap: 4 },
+    { minWidth: 1186, cap: 3 },
+    { minWidth: 865, cap: 2 },
+  ];
+
+  function currentPaneCap() {
+    const width = window.innerWidth;
+    for (const step of PANE_CAP_STEPS) {
+      if (width >= step.minWidth) return step.cap;
+    }
+    return 1;
+  }
+
+  // Narrowing the window must not leave panes rendered below the readable
+  // floor. Panes are closed from the right, and the focused one is kept
+  // whatever its position — losing the pane you are typing in because you
+  // resized the window would be indefensible.
+  let paneCapResizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(paneCapResizeTimer);
+    paneCapResizeTimer = setTimeout(() => {
+      const cap = currentPaneCap();
+      if (state.layout.panes.length <= cap) return;
+      let next = state.layout;
+      while (next.panes.length > cap) {
+        const victim = next.panes.slice().reverse().find((p) => p.sessionId !== next.focusedId);
+        if (!victim) break;
+        unwatchSession(victim.sessionId);
+        next = layoutStore.minimizePane(next, victim.sessionId);
+      }
+      setLayout(next);
+    }, 150);
+  });
 
   // ---------- assistant identity + tracked projects ----------
 
@@ -177,6 +245,8 @@
     renderProjects();
     updateHeaderStats();
     populateMemoryProjectSelect();
+    populateBacklogFolderSelect();
+    renderBacklog(); // re-render so each row's repo <select> reflects the now-loaded project list
     updateCommandBarHint();
   }
 
@@ -292,14 +362,21 @@
           <span class="eyebrow card-status-label"></span>
           <span class="card-unseen-badge" title="New activity since you last opened this"></span>
         </div>
-        <span class="dotnum card-time"></span>
+        <div class="card-top-right">
+          <button type="button" class="card-split-btn" title="Open alongside your other open sessions, instead of replacing them" aria-label="Open in a new pane">⊞ Split</button>
+          <span class="dotnum card-time"></span>
+        </div>
       </div>
       <div class="card-title"></div>
       <div class="card-meta mono">
         <span class="card-meta-path"></span>
       </div>
     `;
-    card.addEventListener('click', () => openDetail(session.id));
+    card.addEventListener('click', (e) => openDetail(session.id, e.shiftKey ? 'split' : 'replace'));
+    card.querySelector('.card-split-btn').addEventListener('click', (e) => {
+      e.stopPropagation(); // the card's own handler would replace instead
+      openDetail(session.id, 'split');
+    });
   }
 
   const STATUS_LABELS = { running: 'Running', 'needs-input': 'Needs input', idle: 'Idle' };
@@ -326,7 +403,7 @@
     card.querySelector('.card-meta-path').textContent =
       `${session.projectName || session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
 
-    card.classList.toggle('card--active', session.id === state.activeDetailId);
+    card.classList.toggle('card--active', openSessionIds().includes(session.id));
   }
 
   // ---------- sessions grid: sort / filter / pagination ----------
@@ -585,24 +662,43 @@
         row.innerHTML = `
           <input type="checkbox" class="backlog-checkbox" />
           <div class="backlog-row-title"></div>
-          <div class="backlog-priority"></div>
-          <div class="mono backlog-row-project"></div>
+          <select class="backlog-priority" title="Priority"></select>
+          <select class="mono backlog-row-project" title="Repo"></select>
           <button type="button" class="backlog-assign-btn">Ship &rarr;</button>
           <button type="button" class="backlog-delete-btn" title="Remove from backlog">&times;</button>
         `;
         const checkbox = row.querySelector('.backlog-checkbox');
         checkbox.checked = !!item.done;
-        checkbox.addEventListener('change', (e) => toggleBacklogItem(item.id, e.target.checked));
+        checkbox.addEventListener('change', (e) => updateBacklogItemField(item.id, 'done', e.target.checked));
 
         const titleEl = row.querySelector('.backlog-row-title');
         titleEl.textContent = item.title;
         if (item.done) titleEl.style.textDecoration = 'line-through';
 
         const priorityEl = row.querySelector('.backlog-priority');
-        priorityEl.textContent = priority;
+        for (const p of ['low', 'medium', 'high']) {
+          const opt = document.createElement('option');
+          opt.value = p;
+          opt.textContent = p;
+          if (p === priority) opt.selected = true;
+          priorityEl.appendChild(opt);
+        }
         priorityEl.classList.add(`backlog-priority--${priority}`);
+        priorityEl.addEventListener('change', (e) => {
+          priorityEl.classList.remove('backlog-priority--low', 'backlog-priority--medium', 'backlog-priority--high');
+          priorityEl.classList.add(`backlog-priority--${e.target.value}`);
+          updateBacklogItemField(item.id, 'priority', e.target.value);
+        });
 
-        row.querySelector('.backlog-row-project').textContent = item.repoPath;
+        const projectEl = row.querySelector('.backlog-row-project');
+        for (const project of trackedProjects()) {
+          const opt = document.createElement('option');
+          opt.value = project.projectPath;
+          opt.textContent = project.projectName || project.projectFolder;
+          if (normalizeClientPath(project.projectPath) === normalizeClientPath(item.repoPath)) opt.selected = true;
+          projectEl.appendChild(opt);
+        }
+        projectEl.addEventListener('change', (e) => updateBacklogItemField(item.id, 'repoPath', e.target.value));
 
         const shipBtn = row.querySelector('.backlog-assign-btn');
         if (item.done) {
@@ -624,12 +720,12 @@
     if (countEl) countEl.textContent = `${queued} queued`;
   }
 
-  async function toggleBacklogItem(id, done) {
+  async function updateBacklogItemField(id, field, value) {
     const result = await guarded(
       fetchJson(`/api/backlog/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ done }),
+        body: JSON.stringify({ [field]: value }),
       }),
       'Failed to update backlog item'
     );
@@ -689,7 +785,7 @@
     await loadBacklog();
   }
 
-  async function addBacklogItem(title, repoPath) {
+  async function addBacklogItem(title, repoPath, priority) {
     if (!title || !title.trim()) {
       showToast('Type a task title before adding it to the backlog.');
       return;
@@ -702,12 +798,33 @@
       fetchJson('/api/backlog', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, repoPath }),
+        body: JSON.stringify({ title, repoPath, priority }),
       }),
       'Failed to add backlog item'
     );
     if (result === null) return;
     await loadBacklog();
+  }
+
+  // Mirrors populateMemoryProjectSelect — the add-row's repo picker needs the
+  // same tracked-project list, kept in sync whenever projects load.
+  function populateBacklogFolderSelect() {
+    const select = document.getElementById('backlog-folder-select');
+    if (!select) return;
+    const previous = select.value;
+    select.textContent = '';
+    for (const project of trackedProjects()) {
+      const option = document.createElement('option');
+      option.value = project.projectPath;
+      option.textContent = project.projectName || project.projectFolder;
+      select.appendChild(option);
+    }
+    const fallback = currentTargetDirectory();
+    if (previous && state.projects.some((p) => p.projectPath === previous)) {
+      select.value = previous;
+    } else if (fallback) {
+      select.value = fallback;
+    }
   }
 
   // ---------- chat panel (detail drawer) ----------
@@ -720,86 +837,311 @@
     sendWsMessage({ type: 'unwatch', sessionId });
   }
 
-  function openDetail(sessionId) {
+  // `mode` is 'replace' (the default — a plain card click reuses the focused
+  // pane) or 'split' (shift-click, ⊞, ⌘K+shift — opens another pane).
+  function openDetail(sessionId, mode) {
     const session = state.sessions.find((s) => s.id === sessionId);
     if (!session) return;
-    if (state.activeDetailId && state.activeDetailId !== sessionId) {
-      unwatchSession(state.activeDetailId);
+    const before = openSessionIds(); // captured before setLayout mutates state.layout
+    const wasOpen = before.includes(sessionId);
+    setLayout(mode === 'split'
+      ? layoutStore.addPane(state.layout, sessionId, { max: currentPaneCap() })
+      : layoutStore.replaceFocused(state.layout, sessionId));
+    // 'replace' mode (a plain card click) can knock a different session out of
+    // the layout without ever calling closeDetail on it. Its server-side
+    // fs.watch (transcriptWatcher.js) survives until an explicit unwatch or
+    // the whole connection drops, so leaving this out would leak one live
+    // watcher per session clicked through in a single pane over the life of
+    // the WebSocket connection.
+    const after = new Set(openSessionIds());
+    for (const id of before) {
+      if (!after.has(id)) unwatchSession(id);
     }
-    const isSwitch = state.activeDetailId !== sessionId;
-    state.activeDetailId = sessionId;
     markSessionViewed(sessionId);
-    // The unseen badge on this card needs to clear immediately, not wait for
-    // the next poll.
+    clearUnseenBadge(sessionId);
+    if (!wasOpen) {
+      loadChatMessages(sessionId);
+      watchSession(sessionId);
+    }
+    // syncActiveCards() runs inside renderPanes now (setLayout always calls
+    // it), so every setLayout caller gets it for free — see setLayout's
+    // comment about being the one place a transition can't be half-applied.
+  }
+
+  function closeDetail(sessionId) {
+    const id = sessionId || focusedSessionId();
+    if (!id) return;
+    unwatchSession(id);
+    setLayout(layoutStore.closePane(state.layout, id));
+    closeSlashPopup();
+  }
+
+  // Pulled out of the old openDetail body: the unseen badge has to clear now,
+  // not on the next poll.
+  function clearUnseenBadge(sessionId) {
     for (const child of document.getElementById('session-grid').children) {
       if (child.dataset && child.dataset.sessionId === sessionId) {
         const badge = child.querySelector('.card-unseen-badge');
         if (badge) badge.classList.remove('card-status-label--unseen');
       }
     }
-    renderDetail(session);
-    if (isSwitch) {
-      const history = document.getElementById('chat-history');
-      if (history) history.innerHTML = '';
-      loadChatMessages(sessionId);
-      watchSession(sessionId);
-      // The composer belongs to whichever session is open: bring back that
-      // session's saved draft (or blank it), never the previous one's text.
-      // Runs after renderDetail has displayed the drawer, so the auto-grow
-      // inside can actually measure.
-      restoreComposerDraft(COMPOSERS.detail);
-      closeSlashPopup();
-      closeMcpPanel();
-    }
-    // reflect the active card highlight without a full grid rebuild
+  }
+
+  function syncActiveCards() {
+    const open = new Set(openSessionIds());
     for (const child of document.getElementById('session-grid').children) {
-      if (child.dataset) child.classList.toggle('card--active', child.dataset.sessionId === sessionId);
+      if (child.dataset) child.classList.toggle('card--active', open.has(child.dataset.sessionId));
     }
   }
 
-  function renderDetail(session) {
-    const drawer = document.getElementById('detail-drawer');
-    drawer.style.display = 'flex';
-    // Opening a session always un-minimizes; the persisted width is restored.
-    state.drawerMinimized = false;
-    applyDrawerSize();
-    const status = statusOf(session);
+  // Reconciles the DOM against state.layout: creates panes that appeared,
+  // destroys panes that went away, and puts the survivors back in order. Panes
+  // are matched by data-session-id and MOVED rather than rebuilt, because
+  // rebuilding would throw away the transcript scroll position and whatever the
+  // user had half-typed into that pane's composer.
+  function renderPanes() {
+    const stage = document.getElementById('pane-stage');
+    const template = document.getElementById('pane-template');
+    const wanted = openSessionIds();
 
-    const dot = document.getElementById('detail-status-dot');
-    if (dot) {
+    for (const el of Array.from(stage.querySelectorAll('.pane'))) {
+      if (!wanted.includes(el.dataset.sessionId)) {
+        // Closing/minimizing a pane mid-generation must not leak the ~120ms
+        // setInterval a generating indicator holds — stop it the same way
+        // syncChatGeneratingIndicator does when generation ends normally,
+        // before the row (and its textEl key) is torn down with the pane.
+        const row = el.querySelector('.pane-chat-history .chat-generating-indicator');
+        if (row) stopWorkingAnimation(row.querySelector('.chat-msg'));
+        el.remove();
+      }
+    }
+
+    // Dividers are removed before the reorder loop below, not after: if they
+    // ran after, `previous.nextSibling` for any pane past the first would
+    // still resolve to a leftover divider rather than the next pane, making
+    // insertBefore's target differ from the pane's real position and forcing
+    // a real DOM move (and a stolen composer focus) on every render.
+    for (const el of Array.from(stage.querySelectorAll('.divider'))) el.remove();
+
+    let previous = null;
+    for (const pane of state.layout.panes) {
+      let el = paneFor(pane.sessionId);
+      if (!el) {
+        el = template.content.firstElementChild.cloneNode(true);
+        el.dataset.sessionId = pane.sessionId;
+        stage.appendChild(el);
+        wirePane(el, pane.sessionId);
+        restoreComposerDraft(composerCtxFor(el));
+      }
+      el.style.flex = `${pane.flex} 1 0`;
+      el.classList.toggle('pane--focus', pane.sessionId === state.layout.focusedId);
+      // insertBefore with the node already at the target position is a
+      // no-op; skip the call entirely rather than relying on that, so a
+      // pane already in place is never removed-and-reinserted by the DOM
+      // (which would steal focus from a mid-typing composer).
+      const ref = previous ? previous.nextSibling : stage.firstChild;
+      if (el !== ref) stage.insertBefore(el, ref);
+      previous = el;
+
+      const session = state.sessions.find((s) => s.id === pane.sessionId);
+      if (session) renderDetail(el, session);
+    }
+
+    const panes = Array.from(stage.querySelectorAll('.pane'));
+    for (let i = 1; i < panes.length; i += 1) {
+      const divider = document.createElement('div');
+      divider.className = 'divider';
+      divider.dataset.left = panes[i - 1].dataset.sessionId;
+      divider.dataset.right = panes[i].dataset.sessionId;
+      stage.insertBefore(divider, panes[i]);
+    }
+
+    syncActiveCards();
+    stage.classList.toggle('pane-stage--empty', state.layout.panes.length === 0);
+    document.getElementById('stage-column').classList.toggle(
+      'stage-column--empty',
+      state.layout.panes.length === 0 && state.layout.minimized.length === 0
+    );
+    document.querySelector('.main').classList.toggle('main--workbench', state.layout.panes.length >= 2);
+    renderLayoutControl();
+    renderDock();
+    renderOpenPanesSection();
+  }
+
+  // Chips for every minimized pane, below the stage. Minimizing used to be a
+  // silent, unrecoverable close (Task 4) — this is the way back.
+  function renderDock() {
+    const dock = document.getElementById('dock');
+    const chips = document.getElementById('dock-chips');
+    dock.hidden = state.layout.minimized.length === 0;
+    chips.textContent = '';
+    for (const sessionId of state.layout.minimized) {
+      const session = state.sessions.find((s) => s.id === sessionId);
+      if (!session) continue;
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'dock-chip';
+      // Same two toggles updateCardContent uses. There is no
+      // .status-dot--running or .status-dot--idle class — running is expressed
+      // by the pulse animation and idle by the base style, so building a class
+      // name from statusOf() would emit two classes that style nothing.
+      const status = statusOf(session);
+      const dot = document.createElement('span');
+      dot.className = 'status-dot';
       dot.classList.toggle('status-dot--pulse-fast', status === 'running' || status === 'needs-input');
       dot.classList.toggle('status-dot--needs-input', status === 'needs-input');
+      chip.appendChild(dot);
+      const label = document.createElement('span');
+      // Session titles come from user prompts — textContent, never innerHTML.
+      label.textContent = session.title || '(no summary yet)';
+      chip.appendChild(label);
+      chip.addEventListener('click', () => {
+        // restorePane is addPane, which at the cap replaces the focused pane
+        // in place: the displaced session drops out of layout.panes without
+        // being added back to layout.minimized and without being unwatched.
+        // Same before/after diff openDetail uses for the identical eviction
+        // case, so whatever gets bumped here is correctly unwatched too.
+        const before = openSessionIds();
+        setLayout(layoutStore.restorePane(state.layout, sessionId, { max: currentPaneCap() }));
+        const after = new Set(openSessionIds());
+        for (const id of before) {
+          if (!after.has(id)) unwatchSession(id);
+        }
+        loadChatMessages(sessionId);
+        watchSession(sessionId);
+      });
+      chips.appendChild(chip);
     }
+  }
 
-    const label = document.getElementById('detail-status-label');
-    if (label) {
-      label.textContent = STATUS_LABELS[status];
-      label.style.color = status === 'needs-input' ? 'var(--warn)' : status === 'running' ? 'var(--accent)' : 'var(--text-faint)';
+  // Every open pane, listed in the sidebar, with the focused one marked —
+  // only shown once there's more than one, since a single open pane is
+  // already fully represented by the pane itself.
+  function renderOpenPanesSection() {
+    const label = document.getElementById('open-panes-label');
+    const list = document.getElementById('open-panes-list');
+    const ids = openSessionIds();
+    label.hidden = ids.length < 2;
+    list.textContent = '';
+    if (ids.length < 2) return;
+    for (const sessionId of ids) {
+      const session = state.sessions.find((s) => s.id === sessionId);
+      if (!session) continue;
+      const row = document.createElement('div');
+      row.className = 'row row--open';
+      row.classList.toggle('row--active', sessionId === state.layout.focusedId);
+      const title = document.createElement('div');
+      title.className = 'row-title';
+      title.textContent = session.title || '(no summary yet)';
+      row.appendChild(title);
+      row.addEventListener('click', () => setLayout(layoutStore.focusPane(state.layout, sessionId)));
+      list.appendChild(row);
     }
+  }
 
-    // needs-input is still a live process — the composer stays in its
-    // "running" (Stop-button) state either way, just with a status line that
-    // says what it's actually waiting on.
-    setDetailComposerRunning(
+  // The glyph is the layout: one bar per open pane, so the control reports the
+  // split rather than just naming it.
+  function renderLayoutControl() {
+    const ctl = document.getElementById('layout-ctl');
+    const count = state.layout.panes.length;
+    ctl.hidden = count < 2;
+    const glyph = document.getElementById('layout-glyph');
+    glyph.textContent = '';
+    for (let i = 0; i < count; i += 1) glyph.appendChild(document.createElement('i'));
+    document.getElementById('layout-ctl-label').textContent = `${count} panes`;
+  }
+
+  // A pane stops being readable below this. The drag clamps both neighbours
+  // rather than letting one collapse — a 40px pane is never something the user
+  // meant to create, and getting back out of one is fiddly.
+  const MIN_PANE_PX = 260;
+
+  function wireDividerDrag() {
+    const stage = document.getElementById('pane-stage');
+    stage.addEventListener('mousedown', (e) => {
+      const divider = e.target.closest('.divider');
+      if (!divider) return;
+      e.preventDefault();
+      const leftEl = paneFor(divider.dataset.left);
+      const rightEl = paneFor(divider.dataset.right);
+      if (!leftEl || !rightEl) return;
+
+      const startX = e.clientX;
+      const leftPx = leftEl.getBoundingClientRect().width;
+      const rightPx = rightEl.getBoundingClientRect().width;
+      const totalPx = leftPx + rightPx;
+      // Conserve the pair's combined flex so the drag never changes how much
+      // room the two of them take from the panes beyond them.
+      const leftFlex = state.layout.panes.find((p) => p.sessionId === divider.dataset.left).flex;
+      const rightFlex = state.layout.panes.find((p) => p.sessionId === divider.dataset.right).flex;
+      const totalFlex = leftFlex + rightFlex;
+
+      document.body.classList.add('is-dragging-divider');
+
+      function onMove(ev) {
+        let px = leftPx + (ev.clientX - startX);
+        px = Math.max(MIN_PANE_PX, Math.min(totalPx - MIN_PANE_PX, px));
+        const ratio = px / totalPx;
+        // Applied straight to the DOM during the drag; the model is updated
+        // once on mouseup, so a drag is one layout write and one localStorage
+        // write rather than one per mousemove.
+        leftEl.style.flex = `${totalFlex * ratio} 1 0`;
+        rightEl.style.flex = `${totalFlex * (1 - ratio)} 1 0`;
+      }
+
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('is-dragging-divider');
+        const ratio = leftEl.getBoundingClientRect().width / totalPx;
+        setLayout(layoutStore.resizePane(
+          state.layout,
+          divider.dataset.left, totalFlex * ratio,
+          divider.dataset.right, totalFlex * (1 - ratio)
+        ));
+      }
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  function renderDetail(paneEl, session) {
+    const status = statusOf(session);
+
+    const spine = paneEl.querySelector('.pane-spine');
+    spine.className = `pane-spine pane-spine--${status}`;
+
+    const dot = paneEl.querySelector('.pane-status-dot');
+    dot.classList.toggle('status-dot--pulse-fast', status === 'running' || status === 'needs-input');
+    dot.classList.toggle('status-dot--needs-input', status === 'needs-input');
+
+    const label = paneEl.querySelector('.pane-status-label');
+    label.textContent = STATUS_LABELS[status];
+    label.style.color = status === 'needs-input' ? 'var(--warn)' : status === 'running' ? 'var(--accent)' : 'var(--text-faint)';
+
+    // needs-input is still a live process — the composer stays in its "running"
+    // (Stop-button) state either way, just with a status line that says what
+    // it's actually waiting on.
+    setPaneComposerRunning(
+      paneEl,
       status === 'running' || status === 'needs-input',
       status === 'needs-input' ? 'waiting for input…' : null,
       status === 'needs-input'
     );
-    renderMcpChip(session);
-    // First measurement that can actually succeed: the drawer was display:none
-    // when the composer was wired, so scrollHeight read 0 there and the height
-    // was left at 'auto'. Only measure while it is still unmeasured —
-    // renderDetail also runs on every poll and WebSocket push, and resetting
-    // the height mid-typing resets the scroll position of a textarea the user
-    // is in the middle of using.
-    const detailComposerInput = composerInput(COMPOSERS.detail);
-    const measured = detailComposerInput && detailComposerInput.style.height;
-    if (detailComposerInput && (!measured || measured === 'auto' || measured === '0px')) {
-      autoGrowComposer(detailComposerInput);
-    }
+    renderMcpChip(paneEl, session);
 
-    drawer.querySelector('.detail-title').textContent = session.title || '(no summary yet)';
-    drawer.querySelector('.detail-meta').textContent =
+    // First measurement that can actually succeed: the pane was not in the
+    // document when its composer was wired, so scrollHeight read 0 there. Only
+    // measure while still unmeasured — renderPanes also runs on every poll and
+    // WebSocket push, and resetting the height mid-typing resets the scroll
+    // position of a textarea the user is in the middle of using.
+    const input = paneEl.querySelector('.pane-send-input');
+    const measured = input && input.style.height;
+    if (input && (!measured || measured === 'auto' || measured === '0px')) autoGrowComposer(input);
+
+    paneEl.querySelector('.detail-title').textContent = session.title || '(no summary yet)';
+    paneEl.querySelector('.detail-meta').textContent =
       `${session.projectName || session.projectFolder}${session.gitBranch ? ' · ' + session.gitBranch : ''}`;
   }
 
@@ -808,9 +1150,10 @@
       fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`),
       'Failed to load the conversation'
     );
-    // The user may have switched or closed the panel while this was in flight.
-    if (result === null || state.activeDetailId !== sessionId) return;
-    renderChatMessages(result.messages);
+    const paneEl = paneFor(sessionId);
+    // The user may have closed this pane while the fetch was in flight.
+    if (result === null || !paneEl) return;
+    renderChatMessages(paneEl.querySelector('.pane-chat-history'), result.messages);
   }
 
   // ---------- chat markdown rendering ----------
@@ -953,9 +1296,9 @@
     if (lastIndex < text.length) parent.appendChild(document.createTextNode(text.slice(lastIndex)));
   }
 
-  function renderChatMessages(messages) {
-    const container = document.getElementById('chat-history');
+  function renderChatMessages(container, messages) {
     if (!container) return;
+    const paneEl = container.closest('.pane');
     // Only auto-stick to the bottom if the user was already reading the tail.
     const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
     container.innerHTML = '';
@@ -965,6 +1308,7 @@
       empty.className = 'chat-empty';
       empty.textContent = `No conversation yet — say something to ${assistantName()}.`;
       container.appendChild(empty);
+      if (paneEl) syncChatGeneratingIndicator(paneEl);
       return;
     }
 
@@ -983,26 +1327,25 @@
       row.appendChild(bubble);
       container.appendChild(row);
     }
+    if (paneEl) syncChatGeneratingIndicator(paneEl);
     if (nearBottom || container.scrollTop === 0) container.scrollTop = container.scrollHeight;
   }
 
   function updateOpenDetailIfPresent() {
-    if (!state.activeDetailId) return;
-    const session = state.sessions.find((s) => s.id === state.activeDetailId);
-    if (session) renderDetail(session);
+    renderPanes();
   }
 
   // Killing a running agent mid-task can lose in-progress work, so this asks
   // first — same window.confirm pattern used for deleting a backlog item.
   // On success the running indicator is greyed out immediately (optimistic);
   // the next WebSocket session-status push or poll will confirm or correct it.
-  async function cancelRunningSession() {
-    const sessionId = state.activeDetailId;
+  async function cancelRunningSession(paneEl) {
+    const sessionId = paneEl.dataset.sessionId;
     if (!sessionId) return;
     if (!window.confirm('Cancel this running session? Any in-progress work may be lost.')) return;
 
-    const btn = document.getElementById('detail-send-btn');
-    const statusText = document.getElementById('detail-composer-status-text');
+    const btn = paneEl.querySelector('.pane-send-btn');
+    const statusText = paneEl.querySelector('.pane-composer-status-text');
     if (btn) btn.disabled = true;
     if (statusText) statusText.textContent = 'stopping…';
 
@@ -1012,7 +1355,7 @@
     );
 
     if (result === null || !result.cancelled) {
-      setDetailComposerRunning(true);
+      setPaneComposerRunning(paneEl, true);
       return;
     }
 
@@ -1021,159 +1364,15 @@
     if (session) session.isRunning = false;
     // Unconditionally, before anything that can bail out: this is the only
     // path that disables the send button, and every route back to enabled ran
-    // through a renderDetail that isn't guaranteed to happen — not when the
+    // through a renderPanes that isn't guaranteed to happen — not when the
     // session is missing from state.sessions (a dashboard-spawned run whose
     // real id isn't known yet), and not when the loadSessions below fails and
     // returns early. Either left the composer permanently unusable.
-    setDetailComposerRunning(false);
+    setPaneComposerRunning(paneEl, false);
     renderSessions();
     updateHeaderStats();
-    if (state.activeDetailId === sessionId && session) renderDetail(session);
+    renderPanes();
     await loadSessions();
-  }
-
-  function closeDetail() {
-    if (state.activeDetailId) unwatchSession(state.activeDetailId);
-    state.activeDetailId = null;
-    closeSlashPopup();
-    const drawer = document.getElementById('detail-drawer');
-    drawer.style.display = 'none';
-    // Closing a full-width drawer must give the main column back, or the
-    // dashboard stays hidden behind a drawer that is no longer there.
-    const main = document.querySelector('.main');
-    if (main) main.classList.remove('main--drawer-full');
-    for (const child of document.getElementById('session-grid').children) {
-      if (child.dataset) child.classList.remove('card--active');
-    }
-  }
-
-  // ---------- drawer sizing ----------
-  //
-  // Width cycles normal → wide → full and persists, because a preference for
-  // reading long transcripts wide shouldn't have to be re-set every reload.
-  // Minimize is deliberately NOT persisted: reopening a session you asked to
-  // see, only to get a collapsed strip, would read as a bug.
-
-  const DRAWER_SIZES = ['normal', 'wide', 'full'];
-  const DRAWER_SIZE_KEY = 'djinn.drawerSize';
-  const DRAWER_WIDTH_PX_KEY = 'djinn.drawerWidthPx';
-  const DRAWER_MIN_WIDTH_PX = 320;
-
-  function readDrawerSize() {
-    try {
-      const saved = localStorage.getItem(DRAWER_SIZE_KEY);
-      return DRAWER_SIZES.includes(saved) ? saved : 'normal';
-    } catch {
-      return 'normal'; // private mode / storage disabled
-    }
-  }
-
-  // A freely-dragged width (see wireDrawerResize) overrides the normal/wide/
-  // full presets via an inline style. Clicking the cycle-size button clears
-  // it and returns to preset behavior.
-  function readDrawerWidthPx() {
-    try {
-      const raw = localStorage.getItem(DRAWER_WIDTH_PX_KEY);
-      const n = raw ? parseInt(raw, 10) : NaN;
-      return Number.isFinite(n) && n > 0 ? n : null;
-    } catch {
-      return null;
-    }
-  }
-
-  function saveDrawerWidthPx(px) {
-    try { localStorage.setItem(DRAWER_WIDTH_PX_KEY, String(px)); } catch { /* non-fatal */ }
-  }
-
-  function clearDrawerWidthPx() {
-    try { localStorage.removeItem(DRAWER_WIDTH_PX_KEY); } catch { /* non-fatal */ }
-  }
-
-  function applyDrawerSize() {
-    const drawer = document.getElementById('detail-drawer');
-    if (!drawer) return;
-    drawer.classList.toggle('drawer--wide', state.drawerSize === 'wide');
-    drawer.classList.toggle('drawer--full', state.drawerSize === 'full');
-    drawer.classList.toggle('drawer--min', state.drawerMinimized);
-
-    // Inline width wins over the preset classes; clearing it (drawerWidthPx
-    // === null) hands width back to whichever preset class is toggled above.
-    drawer.style.width = state.drawerWidthPx ? `${state.drawerWidthPx}px` : '';
-
-    // At full width .main-content still contributes its horizontal padding, so
-    // a sliver of it survives beside the drawer. Take it out of flow instead.
-    const main = document.querySelector('.main');
-    if (main) {
-      main.classList.toggle('main--drawer-full', state.drawerSize === 'full' && !state.drawerMinimized);
-    }
-
-    const sizeBtn = document.getElementById('detail-size-btn');
-    if (sizeBtn) {
-      sizeBtn.textContent = state.drawerSize === 'full' ? '⤡' : '⤢';
-      sizeBtn.title = state.drawerSize === 'full' ? 'Back to normal width' : 'Widen the panel';
-    }
-    const minBtn = document.getElementById('detail-minimize-btn');
-    if (minBtn) {
-      minBtn.textContent = state.drawerMinimized ? '□' : '—';
-      minBtn.title = state.drawerMinimized ? 'Restore' : 'Minimize';
-    }
-  }
-
-  function cycleDrawerSize() {
-    const next = (DRAWER_SIZES.indexOf(state.drawerSize) + 1) % DRAWER_SIZES.length;
-    state.drawerSize = DRAWER_SIZES[next];
-    // Widening a minimized drawer should show you the result, not stay collapsed.
-    state.drawerMinimized = false;
-    // The cycle button is the explicit "back to presets" control.
-    state.drawerWidthPx = null;
-    clearDrawerWidthPx();
-    try { localStorage.setItem(DRAWER_SIZE_KEY, state.drawerSize); } catch { /* non-fatal */ }
-    applyDrawerSize();
-  }
-
-  function toggleDrawerMinimized() {
-    state.drawerMinimized = !state.drawerMinimized;
-    applyDrawerSize();
-  }
-
-  // Free-drag resize via the handle on the drawer's left edge. Dragging left
-  // (away from the drawer's own right-anchored edge) grows it; the resulting
-  // pixel width is applied as an inline style and persisted, and wins over
-  // whichever preset class is active until the size button is clicked.
-  function wireDrawerResize() {
-    const handle = document.getElementById('drawer-resize-handle');
-    const drawer = document.getElementById('detail-drawer');
-    if (!handle || !drawer) return;
-
-    let dragging = false;
-    let startX = 0;
-    let startWidth = 0;
-
-    const onMouseMove = (e) => {
-      if (!dragging) return;
-      const deltaX = startX - e.clientX;
-      const max = Math.floor(window.innerWidth * 0.95);
-      const newWidth = Math.max(DRAWER_MIN_WIDTH_PX, Math.min(max, startWidth + deltaX));
-      state.drawerWidthPx = newWidth;
-      drawer.style.width = `${newWidth}px`;
-    };
-    const onMouseUp = () => {
-      if (!dragging) return;
-      dragging = false;
-      document.body.style.userSelect = '';
-      if (state.drawerWidthPx) saveDrawerWidthPx(state.drawerWidthPx);
-    };
-
-    handle.addEventListener('mousedown', (e) => {
-      if (state.drawerMinimized || state.drawerSize === 'full') return;
-      dragging = true;
-      startX = e.clientX;
-      startWidth = drawer.getBoundingClientRect().width;
-      document.body.style.userSelect = 'none';
-      e.preventDefault();
-    });
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
   }
 
   // ---------- model / permission-mode selectors ----------
@@ -1213,45 +1412,55 @@
     try { localStorage.setItem(PERMISSION_PREF_KEY, value || ''); } catch { /* non-fatal */ }
   }
 
-  const MODEL_SELECT_IDS = ['command-model-select', 'detail-model-select'];
-  const PERMISSION_SELECT_IDS = ['command-permission-select', 'detail-permission-select'];
+  // The command bar's selects are fixed ids; every pane clones its own from
+  // the template, so there can be any number of `.pane-model-select`s on
+  // screen at once — these two gather all of them, live, rather than a
+  // snapshot list that would go stale as panes open and close.
+  function modelSelectEls() {
+    const els = [document.getElementById('command-model-select')];
+    document.querySelectorAll('.pane-model-select').forEach((el) => els.push(el));
+    return els.filter(Boolean);
+  }
+
+  function permissionSelectEls() {
+    const els = [document.getElementById('command-permission-select')];
+    document.querySelectorAll('.pane-permission-select').forEach((el) => els.push(el));
+    return els.filter(Boolean);
+  }
 
   function applyControlPrefsToSelects() {
     const model = readModelPref();
     const permission = readPermissionPref();
-    for (const id of MODEL_SELECT_IDS) {
-      const el = document.getElementById(id);
-      if (el) el.value = model;
-    }
-    for (const id of PERMISSION_SELECT_IDS) {
-      const el = document.getElementById(id);
-      if (el) {
-        el.value = permission;
-        // The warn treatment lands on the wrapper so it covers the custom
-        // caret too — the select itself no longer has a box of its own.
-        const wrap = el.closest('.composer-select-wrap');
-        if (wrap) wrap.classList.toggle('composer-select-wrap--armed', !!permission);
-      }
+    for (const el of modelSelectEls()) el.value = model;
+    for (const el of permissionSelectEls()) {
+      el.value = permission;
+      // The warn treatment lands on the wrapper so it covers the custom
+      // caret too — the select itself no longer has a box of its own.
+      const wrap = el.closest('.composer-select-wrap');
+      if (wrap) wrap.classList.toggle('composer-select-wrap--armed', !!permission);
     }
   }
 
+  function wireControlSelectChange(el, kind) {
+    if (!el) return;
+    el.addEventListener('change', () => {
+      if (kind === 'model') saveModelPref(el.value);
+      else savePermissionPref(el.value);
+      applyControlPrefsToSelects();
+    });
+  }
+
+  // Wires the command bar's selects only — called once at init. A pane's own
+  // selects don't exist yet at that point (they're cloned from the template
+  // on demand), so wirePane calls wirePaneControlSelects below for each one.
   function wireControlSelects() {
-    for (const id of MODEL_SELECT_IDS) {
-      const el = document.getElementById(id);
-      if (!el) continue;
-      el.addEventListener('change', () => {
-        saveModelPref(el.value);
-        applyControlPrefsToSelects();
-      });
-    }
-    for (const id of PERMISSION_SELECT_IDS) {
-      const el = document.getElementById(id);
-      if (!el) continue;
-      el.addEventListener('change', () => {
-        savePermissionPref(el.value);
-        applyControlPrefsToSelects();
-      });
-    }
+    wireControlSelectChange(document.getElementById('command-model-select'), 'model');
+    wireControlSelectChange(document.getElementById('command-permission-select'), 'permission');
+  }
+
+  function wirePaneControlSelects(paneEl) {
+    wireControlSelectChange(paneEl.querySelector('.pane-model-select'), 'model');
+    wireControlSelectChange(paneEl.querySelector('.pane-permission-select'), 'permission');
   }
 
   // "Default" left people guessing what it actually resolves to, so once we
@@ -1279,23 +1488,34 @@
     default: 'Ask',
   };
 
-  function labelDefaultOption(selectId, text) {
-    const el = document.getElementById(selectId);
+  function labelDefaultOption(el, text) {
     const opt = el && el.querySelector('option[value=""]');
     if (opt) opt.textContent = text;
   }
+
+  // Cached so a pane opened after this fetch resolves still gets the label —
+  // see applyCachedDefaultLabels, called from wirePane.
+  let cachedModelDefaultText = null;
+  let cachedPermissionDefaultText = null;
 
   async function loadClaudeDefaultsLabel() {
     const result = await fetchJson('/api/claude-defaults').catch(() => null);
     if (!result) return;
     if (result.model) {
       const label = MODEL_DEFAULT_LABELS[result.model] || result.model;
-      for (const id of MODEL_SELECT_IDS) labelDefaultOption(id, `Default (${label})`);
+      cachedModelDefaultText = `Default (${label})`;
+      for (const el of modelSelectEls()) labelDefaultOption(el, cachedModelDefaultText);
     }
     if (result.permissionMode) {
       const label = PERMISSION_DEFAULT_LABELS[result.permissionMode] || result.permissionMode;
-      for (const id of PERMISSION_SELECT_IDS) labelDefaultOption(id, `Default (${label})`);
+      cachedPermissionDefaultText = `Default (${label})`;
+      for (const el of permissionSelectEls()) labelDefaultOption(el, cachedPermissionDefaultText);
     }
+  }
+
+  function applyCachedDefaultLabels(paneEl) {
+    if (cachedModelDefaultText) labelDefaultOption(paneEl.querySelector('.pane-model-select'), cachedModelDefaultText);
+    if (cachedPermissionDefaultText) labelDefaultOption(paneEl.querySelector('.pane-permission-select'), cachedPermissionDefaultText);
   }
 
   // Merged into a POST body — only non-empty ("default") values are included.
@@ -1313,15 +1533,80 @@
   // While the agent runs, the send control becomes Stop in place and the model
   // and permission selects give way to the working indicator: those two only
   // apply to the *next* message, and a session already in flight can't take one.
-  // Before this, #detail-send-btn had no isRunning wiring at all, so a second
+  // Before this, the send button had no isRunning wiring at all, so a second
   // message could be fired at a busy agent — which lands both sends on one entry
   // in claudeCli's running map, and the first to finish flips isRunning false
   // while the second is still going.
-  function setDetailComposerRunning(running, statusText, needsInput) {
-    const composer = document.getElementById('detail-composer');
-    const btn = document.getElementById('detail-send-btn');
-    const status = document.getElementById('detail-composer-status');
-    const text = document.getElementById('detail-composer-status-text');
+
+  // Cycles a braille spinner plus an elapsed-seconds count next to the status
+  // text while a run is in flight — a static "is working…" label didn't read
+  // as alive. Keyed by textEl so repeated calls with the same label (this
+  // fires on every poll while a session runs) don't restart the elapsed timer.
+  const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  const workingAnimations = new Map(); // textEl -> { intervalId, label, start, frame }
+
+  function startWorkingAnimation(textEl, label) {
+    if (!textEl) return;
+    const existing = workingAnimations.get(textEl);
+    if (existing && existing.label === label) return;
+    if (existing) clearInterval(existing.intervalId);
+    const anim = { label, start: Date.now(), frame: 0, intervalId: null };
+    const render = () => {
+      const elapsed = Math.floor((Date.now() - anim.start) / 1000);
+      textEl.textContent = `${SPINNER_FRAMES[anim.frame % SPINNER_FRAMES.length]} ${label} ${elapsed}s`;
+      anim.frame += 1;
+    };
+    render();
+    anim.intervalId = setInterval(render, 120);
+    workingAnimations.set(textEl, anim);
+  }
+
+  function stopWorkingAnimation(textEl) {
+    const existing = textEl && workingAnimations.get(textEl);
+    if (!existing) return;
+    clearInterval(existing.intervalId);
+    workingAnimations.delete(textEl);
+  }
+
+  // Whether each open pane is generating, and what to say. Keyed by pane
+  // element rather than held as a module-level flag, because several agents
+  // now run at once and a shared flag put one session's spinner in every pane.
+  // Set only by setPaneComposerRunning below, so the chat feed and the composer
+  // status never disagree about it. renderChatMessages rebuilds the feed from
+  // scratch on every transcript update, which would otherwise drop this row as
+  // fast as it's added; syncChatGeneratingIndicator re-adds it from this state
+  // every time, immediately on send and after every rebuild.
+  const paneGenerating = new WeakMap(); // paneEl -> { generating, label }
+
+  function syncChatGeneratingIndicator(paneEl) {
+    const container = paneEl.querySelector('.pane-chat-history');
+    if (!container) return;
+    const st = paneGenerating.get(paneEl) || { generating: false, label: '' };
+    let row = container.querySelector('.chat-generating-indicator');
+    if (st.generating) {
+      if (!row) {
+        row = document.createElement('div');
+        row.className = 'chat-generating-indicator chat-row chat-row--assistant';
+        const avatar = document.createElement('span');
+        avatar.className = 'orb orb--dot';
+        row.appendChild(avatar);
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-msg chat-msg--generating';
+        row.appendChild(bubble);
+        container.appendChild(row);
+      }
+      startWorkingAnimation(row.querySelector('.chat-msg'), st.label);
+    } else if (row) {
+      stopWorkingAnimation(row.querySelector('.chat-msg'));
+      row.remove();
+    }
+  }
+
+  function setPaneComposerRunning(paneEl, running, statusText, needsInput) {
+    const composer = paneEl.querySelector('.pane-composer');
+    const btn = paneEl.querySelector('.pane-send-btn');
+    const status = paneEl.querySelector('.pane-composer-status');
+    const text = paneEl.querySelector('.pane-composer-status-text');
     const dot = status ? status.querySelector('.composer-status-dot') : null;
 
     if (composer) composer.classList.toggle('composer--running', running);
@@ -1330,6 +1615,10 @@
       status.classList.toggle('composer-status--needs-input', !!needsInput);
     }
     if (dot) dot.classList.toggle('composer-status-dot--needs-input', !!needsInput);
+    // The animated spinner lives in the chat feed itself
+    // (syncChatGeneratingIndicator above) — this status line next to the send
+    // button stays static so the same "generating" motion isn't duplicated
+    // right under the input box.
     if (text && running) text.textContent = statusText || `${assistantName()} is working…`;
     if (btn) {
       btn.dataset.mode = running ? 'stop' : 'send';
@@ -1339,6 +1628,11 @@
       btn.setAttribute('aria-label', running ? 'Stop this session' : 'Send');
       btn.disabled = false;
     }
+    paneGenerating.set(paneEl, {
+      generating: running,
+      label: statusText || `${assistantName()} is working…`,
+    });
+    syncChatGeneratingIndicator(paneEl);
   }
 
   // `claude mcp list` live-checks every server over the network (~15s), so it
@@ -1347,13 +1641,17 @@
   // instead of going back to a bare "mcp" that says nothing.
   const mcpStatusByPath = new Map(); // normalized project path -> { total, connected }
 
-  function renderMcpChip(session) {
-    const dot = document.getElementById('detail-mcp-dot');
-    const label = document.getElementById('detail-mcp-label');
+  function renderMcpChip(paneEl, session) {
+    const dot = paneEl.querySelector('.pane-mcp-dot');
+    const label = paneEl.querySelector('.pane-mcp-label');
     if (!dot || !label) return;
     const projectPath = session && session.projectPath;
     const known = projectPath ? mcpStatusByPath.get(normalizeClientPath(projectPath)) : null;
-    dot.className = 'composer-chip-dot';
+    // Reset to base state without dropping the .pane-mcp-dot lookup class this
+    // element is found by — this runs on every render (renderDetail fires on
+    // every poll), and a plain className overwrite would strand the next
+    // lookup with nothing to find.
+    dot.className = 'composer-chip-dot pane-mcp-dot';
     if (!known) {
       label.textContent = 'mcp';
       return;
@@ -1364,31 +1662,35 @@
     }
   }
 
-  async function sendDetailMessage(message) {
-    if (!state.activeDetailId) return;
+  async function sendFromPane(paneEl) {
+    const sessionId = paneEl.dataset.sessionId;
+    if (!sessionId) return;
+    const input = paneEl.querySelector('.pane-send-input');
+    const message = input ? input.value : '';
     if (!message || !message.trim()) {
       showToast('Type a message before sending.');
       return;
     }
-    const sessionId = state.activeDetailId;
-    setDetailComposerRunning(true);
+    setPaneComposerRunning(paneEl, true);
 
     try {
       await fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, ...currentModelAndPermissionFields() }),
+        body: JSON.stringify({ message, ...currentModelAndPermissionFields(paneEl) }),
       });
+      // 202 means accepted, not finished. The composer stays in its running
+      // state until a session-status push or the 10s poll says the run ended —
+      // releasing it here would re-enable Send while the agent is mid-run,
+      // which is exactly the double-send this state exists to prevent.
       await loadSessions();
-      if (state.activeDetailId === sessionId) await loadChatMessages(sessionId);
     } catch (err) {
       const errorMessage = err && err.message ? err.message : 'Failed to send the message';
       console.error('Failed to send message to session', err);
       showToast(errorMessage);
-    } finally {
-      setDetailComposerRunning(false);
-      // The session's real status wins over the optimistic clear above.
-      updateOpenDetailIfPresent();
+      // The run never started, so nothing will arrive to unlock the composer.
+      setPaneComposerRunning(paneEl, false);
+      renderPanes();
     }
   }
 
@@ -1400,25 +1702,42 @@
   // everything below is written against a context object — the auto-grow, the
   // slash popup and the @ picker are defined once and can't drift apart.
 
-  const COMPOSERS = {
-    detail: {
-      key: 'detail', // stable storage bucket for history/drafts — see below
-      inputId: 'detail-send-input',
-      popupId: 'slash-popup',
-      projectPath: () => {
-        const session = state.sessions.find((s) => s.id === state.activeDetailId);
-        return (session && session.projectPath) || null;
-      },
-    },
-    command: {
-      key: 'command',
-      inputId: 'command-input',
-      popupId: 'command-slash-popup',
-      projectPath: () => currentTargetDirectory(),
-    },
+  // Both composer surfaces are described the same way, so every behaviour
+  // written against a context — slash, @, history, drafts, auto-grow — works
+  // for a pane without knowing panes exist. The accessors are functions rather
+  // than element references because a pane can be removed from the DOM and its
+  // context must go inert rather than resurrect a detached node.
+  const COMMAND_COMPOSER = {
+    key: 'command',
+    input: () => document.getElementById('command-input'),
+    popup: () => document.getElementById('command-slash-popup'),
+    sessionId: () => null,
+    projectPath: () => currentTargetDirectory(),
   };
 
-  function composerInput(ctx) { return document.getElementById(ctx.inputId); }
+  const paneCtxCache = new WeakMap();
+
+  function composerCtxFor(paneEl) {
+    let ctx = paneCtxCache.get(paneEl);
+    if (ctx) return ctx;
+    ctx = {
+      // One shared history ring for every pane, deliberately. A per-pane ring
+      // could never do the thing recall exists for: re-running a prompt against
+      // a different session.
+      key: 'detail',
+      input: () => paneEl.querySelector('.pane-send-input'),
+      popup: () => paneEl.querySelector('.pane-slash-popup'),
+      sessionId: () => paneEl.dataset.sessionId,
+      projectPath: () => {
+        const session = state.sessions.find((s) => s.id === paneEl.dataset.sessionId);
+        return (session && session.projectPath) || null;
+      },
+    };
+    paneCtxCache.set(paneEl, ctx);
+    return ctx;
+  }
+
+  function composerInput(ctx) { return ctx.input(); }
 
   // The textarea carries no fixed height — it is re-measured against its own
   // content on every change. scrollHeight only reports the content height once
@@ -1630,7 +1949,8 @@
 
   function draftKeyFor(ctx) {
     if (ctx.key === 'command') return 'command';
-    return state.activeDetailId ? `session:${state.activeDetailId}` : null;
+    const id = ctx.sessionId();
+    return id ? `session:${id}` : null;
   }
 
   // Keeps the newest MAX_SESSION_DRAFTS session drafts, then keeps dropping the
@@ -1760,7 +2080,7 @@
     slashState.items = [];
     slashState.ctx = null;
     if (!ctx) return;
-    const popup = document.getElementById(ctx.popupId);
+    const popup = ctx.popup();
     if (popup) {
       popup.hidden = true;
       popup.textContent = '';
@@ -1768,7 +2088,7 @@
   }
 
   function renderSlashPopup() {
-    const popup = slashState.ctx && document.getElementById(slashState.ctx.popupId);
+    const popup = slashState.ctx && slashState.ctx.popup();
     if (!popup) return;
     popup.textContent = '';
     if (slashState.items.length === 0) {
@@ -1920,13 +2240,13 @@
   // destroying something the user typed.
   function updateCommandPillsVisibility() {
     const wrap = document.getElementById('command-pills');
-    const input = composerInput(COMPOSERS.command);
+    const input = composerInput(COMMAND_COMPOSER);
     if (wrap && input) wrap.hidden = input.value.trim().length > 0;
   }
 
   function wireCommandPills() {
     const wrap = document.getElementById('command-pills');
-    const input = composerInput(COMPOSERS.command);
+    const input = composerInput(COMMAND_COMPOSER);
     if (!wrap || !input) return;
     for (const pill of wrap.querySelectorAll('.pill')) {
       pill.addEventListener('click', () => {
@@ -2000,18 +2320,24 @@
   // testing), so this only ever runs when the user clicks the button —
   // never on drawer open, never polled.
 
-  function closeMcpPanel() {
-    const panel = document.getElementById('mcp-panel');
+  function closeMcpPanel(paneEl) {
+    const panel = paneEl.querySelector('.pane-mcp-panel');
     if (panel) panel.hidden = true;
   }
 
-  async function checkMcpStatus() {
-    const sessionId = state.activeDetailId;
+  function toggleMcpPanel(paneEl) {
+    const panel = paneEl.querySelector('.pane-mcp-panel');
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) checkMcpStatus(paneEl);
+  }
+
+  async function checkMcpStatus(paneEl) {
+    const sessionId = paneEl.dataset.sessionId;
     if (!sessionId) return;
     const session = state.sessions.find((s) => s.id === sessionId);
     const projectPath = session && session.projectPath;
-    const panel = document.getElementById('mcp-panel');
-    const body = document.getElementById('mcp-panel-body');
+    const panel = paneEl.querySelector('.pane-mcp-panel');
+    const body = paneEl.querySelector('.pane-mcp-panel-body');
     if (!panel || !body) return;
 
     panel.hidden = false;
@@ -2033,8 +2359,8 @@
       fetchJson(`/api/mcp/status?cwd=${encodeURIComponent(projectPath)}`),
       'Failed to check MCP server status'
     );
-    // The user may have closed the panel or switched sessions while this was in flight.
-    if (panel.hidden || state.activeDetailId !== sessionId) return;
+    // The user may have closed the panel or closed this pane while this was in flight.
+    if (panel.hidden || !document.body.contains(paneEl)) return;
 
     body.innerHTML = '';
     if (result === null) {
@@ -2050,7 +2376,7 @@
       total: servers.length,
       connected: servers.filter((s) => s.status === 'connected').length,
     });
-    renderMcpChip(session);
+    renderMcpChip(paneEl, session);
 
     if (servers.length === 0) {
       const empty = document.createElement('div');
@@ -2184,11 +2510,11 @@
     renderQuickSwitcherResults();
   }
 
-  function selectQuickSwitcherItem(idx) {
+  function selectQuickSwitcherItem(idx, mode) {
     const session = quickSwitcherState.items[idx];
     if (!session) return;
     closeQuickSwitcher();
-    openDetail(session.id); // same function the session cards use
+    openDetail(session.id, mode); // same function the session cards use
   }
 
   function wireQuickSwitcher() {
@@ -2204,13 +2530,25 @@
     input.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown') { e.preventDefault(); moveQuickSwitcherActive(1); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); moveQuickSwitcherActive(-1); }
-      else if (e.key === 'Enter') { e.preventDefault(); selectQuickSwitcherItem(quickSwitcherState.activeIndex); }
+      else if (e.key === 'Enter') { e.preventDefault(); selectQuickSwitcherItem(quickSwitcherState.activeIndex, e.shiftKey ? 'split' : 'replace'); }
       // Escape is handled by the document-level handler below.
     });
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) closeQuickSwitcher();
     });
     document.addEventListener('keydown', (e) => {
+      // Ctrl rather than Cmd/Meta: on macOS Cmd+1..9 is the browser's own tab
+      // switcher and cannot be taken. Ctrl+N is free in both.
+      if (e.ctrlKey && !e.metaKey && !e.altKey && e.key >= '1' && e.key <= '4') {
+        const pane = state.layout.panes[Number(e.key) - 1];
+        if (pane) {
+          e.preventDefault();
+          setLayout(layoutStore.focusPane(state.layout, pane.sessionId));
+          const input = paneFor(pane.sessionId).querySelector('.pane-send-input');
+          if (input) input.focus();
+        }
+        return;
+      }
       const key = e.key ? e.key.toLowerCase() : '';
       if ((e.metaKey || e.ctrlKey) && key === 'k') {
         e.preventDefault();
@@ -2349,7 +2687,10 @@
     const text = document.getElementById('command-composer-status-text');
     if (composer) composer.classList.toggle('composer--running', busy);
     if (status) status.hidden = !busy;
-    if (text && busy) text.textContent = `${assistantName()} is working…`;
+    if (text) {
+      if (busy) startWorkingAnimation(text, `${assistantName()} is working…`);
+      else stopWorkingAnimation(text);
+    }
     if (btn) {
       btn.disabled = busy;
       btn.title = busy ? 'Waiting for the agent to finish…' : 'Start a session (Enter)';
@@ -2387,7 +2728,7 @@
       setCommandComposerBusy(false);
     }
     if (result === null) return;
-    commitComposerSend(COMPOSERS.command);
+    commitComposerSend(COMMAND_COMPOSER);
     updateCommandPillsVisibility(); // clearing fires no input event
     showToast(`${assistantName()} finished the run — session added.`, false);
     await Promise.all([loadSessions(), loadProjects(), loadRecentDirectories()]);
@@ -2411,8 +2752,8 @@
     wsConnection = ws;
     ws.addEventListener('open', () => {
       // Server-side watches die with the old connection — re-establish for
-      // whichever chat is open.
-      if (state.activeDetailId) watchSession(state.activeDetailId);
+      // every chat currently open, not just one.
+      for (const id of openSessionIds()) watchSession(id);
     });
     ws.addEventListener('message', (event) => {
       let msg;
@@ -2423,7 +2764,10 @@
       }
       if (msg.type === 'session-status') {
         loadSessions();
-      } else if (msg.type === 'transcript-update' && msg.sessionId === state.activeDetailId) {
+      } else if (msg.type === 'session-error') {
+        showToast(msg.message || 'The agent run failed');
+        loadSessions();
+      } else if (msg.type === 'transcript-update' && openSessionIds().includes(msg.sessionId)) {
         loadChatMessages(msg.sessionId);
       }
     });
@@ -2617,6 +2961,22 @@
 
   // ---------- sidebar view switching (All sessions <-> Memory) ----------
 
+  // Docks every open pane rather than closing it: `.main--workbench` (set
+  // whenever 2+ panes are open) hides `.main-content` entirely, and both
+  // `#memory-panel` and the dashboard sections below live inside it. Getting
+  // to either view means clearing the workbench state first, but the user
+  // asked to change views, not to lose their transcripts — every pane stays
+  // one click away in the dock.
+  function dockAllPanes() {
+    if (state.layout.panes.length === 0) return;
+    let next = state.layout;
+    for (const sessionId of openSessionIds()) {
+      unwatchSession(sessionId);
+      next = layoutStore.minimizePane(next, sessionId);
+    }
+    setLayout(next);
+  }
+
   function mainViewSections() {
     return [
       document.querySelector('.hero-orb-wrap'),
@@ -2634,6 +2994,7 @@
   }
 
   function showSessionsView() {
+    dockAllPanes();
     for (const el of mainViewSections()) el.style.display = '';
     // The Load more row owns its own display (it's hidden once everything is
     // shown), so blanket-restoring above would resurrect a stale button.
@@ -2644,6 +3005,11 @@
   }
 
   function showMemoryView() {
+    // #memory-panel lives inside .main-content, which .main--workbench hides
+    // outright once 2+ panes are open (see dockAllPanes above) — without
+    // this, setting #memory-panel's own display never mattered because its
+    // hidden ancestor still won.
+    dockAllPanes();
     for (const el of mainViewSections()) el.style.display = 'none';
     document.getElementById('memory-panel').style.display = 'block';
     document.getElementById('memory-row').classList.add('row--active');
@@ -2910,6 +3276,53 @@
     input.addEventListener('blur', () => finish(true));
   }
 
+  // Enter never stops a session — a keystroke that far from the user's intent
+  // shouldn't be able to kill a run. Stop is the button, deliberately clicked.
+  // This also owns the commit-on-send bookkeeping (history, draft, slash
+  // popup) that used to live in the singleton's sendFromDetailComposer.
+  function commitAndSendFromPane(paneEl) {
+    const btn = paneEl.querySelector('.pane-send-btn');
+    if (btn && btn.dataset.mode === 'stop') {
+      showToast('That agent is still working — stop it, or wait for it to finish.');
+      return;
+    }
+    const ctx = composerCtxFor(paneEl);
+    sendFromPane(paneEl); // async; reads the value before we clear it
+    commitComposerSend(ctx);
+    closeSlashPopup();
+  }
+
+  function wirePane(paneEl, sessionId) {
+    const ctx = composerCtxFor(paneEl);
+    wireComposer(ctx, () => commitAndSendFromPane(paneEl));
+    wirePaneControlSelects(paneEl);
+    applyControlPrefsToSelects();
+    applyCachedDefaultLabels(paneEl);
+    paneEl.querySelector('.pane-attach-btn').addEventListener('click', () => browseForFile(ctx));
+    paneEl.querySelector('.pane-slash-btn').addEventListener('click', () => openSlashFromButton(ctx));
+    paneEl.querySelector('.pane-close-btn').addEventListener('click', () => closeDetail(sessionId));
+    paneEl.querySelector('.pane-minimize-btn').addEventListener('click', () => {
+      unwatchSession(paneEl.dataset.sessionId);
+      setLayout(layoutStore.minimizePane(state.layout, paneEl.dataset.sessionId));
+    });
+    paneEl.querySelector('.pane-mcp-btn').addEventListener('click', () => toggleMcpPanel(paneEl));
+    paneEl.querySelector('.pane-mcp-panel-close').addEventListener('click', () => closeMcpPanel(paneEl));
+    // One button, two jobs, as before: setPaneComposerRunning owns
+    // dataset.mode, so the handler never has to consult session state itself.
+    // Enter deliberately never stops a session — only this button does.
+    paneEl.querySelector('.pane-send-btn').addEventListener('click', (e) => {
+      if (e.currentTarget.dataset.mode === 'stop') cancelRunningSession(paneEl);
+      else commitAndSendFromPane(paneEl);
+    });
+    // mousedown, not click: focus must follow before a keystroke in this pane's
+    // composer is routed anywhere.
+    paneEl.addEventListener('mousedown', () => {
+      if (paneEl.dataset.sessionId !== state.layout.focusedId) {
+        setLayout(layoutStore.focusPane(state.layout, paneEl.dataset.sessionId));
+      }
+    });
+  }
+
   // ---------- wiring ----------
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -2943,18 +3356,22 @@
     document.getElementById('command-send-btn').addEventListener('click', () => {
       startNewSession(currentTargetDirectory());
     });
-    wireComposer(COMPOSERS.command, () => startNewSession(currentTargetDirectory()));
+    wireComposer(COMMAND_COMPOSER, () => startNewSession(currentTargetDirectory()));
     // Before wireCommandPills, which computes pill visibility from the value.
-    restoreComposerDraft(COMPOSERS.command);
+    restoreComposerDraft(COMMAND_COMPOSER);
     wireCommandPills();
     document.getElementById('command-attach-btn')
-      .addEventListener('click', () => browseForFile(COMPOSERS.command));
+      .addEventListener('click', () => browseForFile(COMMAND_COMPOSER));
     document.getElementById('command-slash-btn')
-      .addEventListener('click', () => openSlashFromButton(COMPOSERS.command));
+      .addEventListener('click', () => openSlashFromButton(COMMAND_COMPOSER));
 
     document.getElementById('backlog-add-btn').addEventListener('click', () => {
       const input = document.getElementById('backlog-input');
-      addBacklogItem(input.value.trim(), currentTargetDirectory()).then(() => {
+      const folderSelect = document.getElementById('backlog-folder-select');
+      const prioritySelect = document.getElementById('backlog-priority-select');
+      const repoPath = (folderSelect && folderSelect.value) || currentTargetDirectory();
+      const priority = (prioritySelect && prioritySelect.value) || 'medium';
+      addBacklogItem(input.value.trim(), repoPath, priority).then(() => {
         if (input.value) input.value = '';
       });
     });
@@ -3002,45 +3419,16 @@
     // rename
     document.getElementById('header-assistant-name').addEventListener('click', startHeaderRename);
 
-    document.getElementById('detail-close-btn').addEventListener('click', closeDetail);
-    document.getElementById('detail-size-btn').addEventListener('click', cycleDrawerSize);
-    document.getElementById('detail-minimize-btn').addEventListener('click', toggleDrawerMinimized);
-    // A minimized drawer is mostly header, so let the header itself restore it.
-    document.querySelector('#detail-drawer .drawer-header').addEventListener('click', (e) => {
-      if (state.drawerMinimized && !e.target.closest('.drawer-controls')) toggleDrawerMinimized();
-    });
-    wireDrawerResize();
-
-    const detailInput = composerInput(COMPOSERS.detail);
-    const detailSendBtn = document.getElementById('detail-send-btn');
-
-    // Enter never stops a session — a keystroke that far from the user's intent
-    // shouldn't be able to kill a run. Stop is the button, deliberately clicked.
-    function sendFromDetailComposer() {
-      if (detailSendBtn.dataset.mode === 'stop') {
-        showToast('That agent is still working — stop it, or wait for it to finish.');
-        return;
+    // Panes are wired individually as they're cloned from the template — see
+    // wirePane, called from renderPanes. Nothing detail-* remains here.
+    wireDividerDrag();
+    document.getElementById('layout-ctl').addEventListener('click', () => {
+      let next = state.layout;
+      for (let i = 1; i < next.panes.length; i += 1) {
+        next = layoutStore.resizePane(next, next.panes[i - 1].sessionId, 1, next.panes[i].sessionId, 1);
       }
-      sendDetailMessage(detailInput.value); // async; reads the value before we clear it
-      commitComposerSend(COMPOSERS.detail);
-      closeSlashPopup();
-    }
-    detailSendBtn.addEventListener('click', () => {
-      if (detailSendBtn.dataset.mode === 'stop') { cancelRunningSession(); return; }
-      sendFromDetailComposer();
+      setLayout(next);
     });
-    wireComposer(COMPOSERS.detail, sendFromDetailComposer);
-
-    document.getElementById('detail-attach-btn')
-      .addEventListener('click', () => browseForFile(COMPOSERS.detail));
-    document.getElementById('detail-slash-btn')
-      .addEventListener('click', () => openSlashFromButton(COMPOSERS.detail));
-    document.getElementById('detail-mcp-btn').addEventListener('click', () => {
-      const panel = document.getElementById('mcp-panel');
-      if (panel && !panel.hidden) { closeMcpPanel(); return; }
-      checkMcpStatus();
-    });
-    document.getElementById('mcp-panel-close').addEventListener('click', closeMcpPanel);
 
     // Model / permission-mode selectors: same preference mirrored in both the
     // command bar and the drawer footer.
@@ -3054,7 +3442,18 @@
     // assistant's name are in place before anything renders.
     (async () => {
       await initSettings();
-      loadSessions();
+      await loadSessions();
+
+      // Restore whichever panes were open at last reload, dropping any
+      // session the server no longer reports.
+      let rawLayout = null;
+      try { rawLayout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null'); } catch { rawLayout = null; }
+      setLayout(layoutStore.hydrate(rawLayout, state.sessions.map((s) => s.id), { max: currentPaneCap() }));
+      for (const id of openSessionIds()) { loadChatMessages(id); watchSession(id); }
+      // No extra syncActiveCards() pass needed here: setLayout above already
+      // ran renderPanes(), which syncs the card grid (built moments earlier
+      // by loadSessions()) against the just-hydrated layout.
+
       loadProjects();
       loadBacklog();
       loadRecentDirectories();

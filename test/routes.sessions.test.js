@@ -225,8 +225,8 @@ test('POST /api/sessions/:id/message resumes a known session', async () => {
   const server = createApp(makeDeps()).listen(0);
   const { port } = server.address();
   const { status, body } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
-  assert.strictEqual(status, 200);
-  assert.strictEqual(body.session_id, 's1');
+  assert.strictEqual(status, 202);
+  assert.deepStrictEqual(body, { accepted: true, sessionId: 's1' });
   server.close();
 });
 
@@ -263,27 +263,95 @@ test('POST /api/sessions/:id/message 409s when the project path never resolved',
   server.close();
 });
 
-test('POST /api/sessions/:id/message surfaces claudeCli\'s 409 with the message intact and logs nothing', async () => {
-  const logger = makeLogger();
+test('POST /api/sessions/:id/message returns 202 without waiting for the run', async () => {
+  let resolveRun;
   const deps = makeDeps({
-    logger,
     claudeCli: {
-      isRunning: () => true,
+      isRunning: () => false,
       startSession: async () => ({}),
-      sendMessage: async () => {
-        throw Object.assign(new Error('a run is already in progress for this session'), { status: 409 });
-      },
+      sendMessage: () => new Promise((resolve) => { resolveRun = resolve; }),
     },
   });
   const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
-  // No try/catch in the route: asyncHandler forwards the rejection and the
-  // error middleware passes err.message through because the status is < 500.
-  assert.strictEqual(status, 409);
-  assert.strictEqual(body.error, 'a run is already in progress for this session');
-  assert.deepStrictEqual(logger.errors, [], 'a deliberate 4xx must stay out of the error log');
-  server.close();
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
+    assert.strictEqual(status, 202, 'responds before the agent finishes');
+    assert.deepStrictEqual(body, { accepted: true, sessionId: 's1' });
+  } finally {
+    if (resolveRun) resolveRun({ session_id: 's1' });
+    server.close();
+  }
+});
+
+test('POST /api/sessions/:id/message 409s when a run is already in progress', async () => {
+  let called = false;
+  const deps = makeDeps({
+    claudeCli: {
+      isRunning: (id) => id === 's1',
+      startSession: async () => ({}),
+      sendMessage: async () => { called = true; return {}; },
+    },
+  });
+  const server = createApp(deps).listen(0);
+  try {
+    const { port } = server.address();
+    const { status, body } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
+    assert.strictEqual(status, 409);
+    assert.match(body.error, /already in progress/);
+    assert.strictEqual(called, false, 'no child is spawned for a refused send');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/sessions/:id/message broadcasts session-error when the run fails', async () => {
+  const sent = [];
+  const deps = makeDeps({
+    broadcast: (msg) => sent.push(msg),
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async () => ({}),
+      sendMessage: async () => { throw new Error('claude exited with code 1: boom'); },
+    },
+  });
+  const server = createApp(deps).listen(0);
+  try {
+    const { port } = server.address();
+    const { status } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
+    assert.strictEqual(status, 202);
+    // The rejection is handled a tick after the response; let it land.
+    await new Promise((r) => setTimeout(r, 20));
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].type, 'session-error');
+    assert.strictEqual(sent[0].sessionId, 's1');
+    // Same policy as the error middleware: a 5xx-class failure does not leak
+    // its raw message to the client.
+    assert.strictEqual(sent[0].message, 'Internal server error');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/sessions/:id/message stays quiet when the run was cancelled', async () => {
+  const sent = [];
+  const deps = makeDeps({
+    broadcast: (msg) => sent.push(msg),
+    claudeCli: {
+      isRunning: () => false,
+      startSession: async () => ({}),
+      sendMessage: async () => { throw Object.assign(new Error('cancelled'), { cancelled: true }); },
+    },
+  });
+  const server = createApp(deps).listen(0);
+  try {
+    const { port } = server.address();
+    await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepStrictEqual(sent, [], 'a user-initiated Stop is not an error');
+  } finally {
+    server.close();
+  }
 });
 
 test('GET /api/sessions/active-count returns activeCount from claudeCli', async () => {
@@ -402,22 +470,6 @@ test('POST /api/sessions returns JSON (not HTML), no longer 502, when claudeCli.
   // The raw claude/CLI error text must not leak to the client for an
   // unexpected 5xx failure.
   assert.notStrictEqual(body.error, 'claude exited with code 1: boom');
-  server.close();
-});
-
-test('POST /api/sessions/:id/message returns JSON (not HTML) when claudeCli.sendMessage rejects', async () => {
-  const deps = makeDeps({
-    claudeCli: {
-      isRunning: () => false,
-      startSession: async () => ({}),
-      sendMessage: async () => { throw new Error('claude exited with code 1: boom'); },
-    },
-  });
-  const server = createApp(deps).listen(0);
-  const { port } = server.address();
-  const { status, body } = await request(port, 'POST', '/api/sessions/s1/message', { message: 'go' });
-  assert.strictEqual(status, 500);
-  assert.ok(body && body.error);
   server.close();
 });
 

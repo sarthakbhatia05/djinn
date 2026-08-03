@@ -12,7 +12,7 @@ const { asyncHandler } = require('../lib/asyncHandler');
 // check manually themselves.
 const NEEDS_INPUT_STALE_MS = 25000;
 
-function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, settingsStore }) {
+function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, settingsStore, broadcast, logger = console }) {
   const router = express.Router();
 
   router.get('/', (req, res) => {
@@ -67,6 +67,13 @@ function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, sett
     res.json({ messages });
   });
 
+  // Dispatches the run and responds immediately. `--print` blocks for the
+  // entire agent run, so awaiting it held one HTTP connection open per active
+  // session; at the 4-pane cap that plus the dashboard's 10s poll sits exactly
+  // on the browser's ~6-connections-per-origin limit, and the UI appears to
+  // freeze for reasons nothing on screen explains. The client learns the
+  // outcome the same way it already learns about transcript growth: over the
+  // WebSocket.
   router.post('/:id/message', asyncHandler(async (req, res) => {
     const { message, model, permissionMode } = req.body;
     if (!message) {
@@ -84,8 +91,27 @@ function createSessionsRouter({ sessionStore, claudeCli, recentDirectories, sett
       res.status(409).json({ error: 'this session\'s project directory could not be resolved; it may have been moved or removed' });
       return;
     }
-    const result = await claudeCli.sendMessage(req.params.id, session.projectPath, message, { model, permissionMode });
-    res.json(result);
+    // runOneShot has its own same-trackId guard, but it rejects — and once we
+    // stop awaiting, a rejection can no longer become a response. Check here so
+    // the refusal is still an HTTP 409 the composer can show.
+    if (claudeCli.isRunning(req.params.id)) {
+      res.status(409).json({ error: 'a run is already in progress for this session — wait for it to finish before sending another message' });
+      return;
+    }
+
+    claudeCli.sendMessage(req.params.id, session.projectPath, message, { model, permissionMode })
+      .catch((err) => {
+        // A cancel is a thing the user asked for, not a failure to report.
+        if (err && err.cancelled) return;
+        const status = typeof err.status === 'number' ? err.status : 500;
+        if (status >= 500) logger.error(`[POST /api/sessions/${req.params.id}/message] ${status}:`, err);
+        // Same leak policy as the error middleware in server/app.js: raw
+        // messages pass through only for deliberate 4xx.
+        const clientMessage = status < 500 && err.message ? err.message : 'Internal server error';
+        broadcast({ type: 'session-error', sessionId: req.params.id, message: clientMessage });
+      });
+
+    res.status(202).json({ accepted: true, sessionId: req.params.id });
   }));
 
   // Kills the child process backing a running session (dashboard-spawned

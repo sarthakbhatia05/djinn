@@ -15,6 +15,11 @@ function createApp(deps = {}) {
   // silent stub) instead of spraying error output over every negative-path
   // test. Production just gets the default.
   const logger = deps.logger || console;
+  // Injected like logger. Routes that finish work after their response has
+  // already been sent — a fire-and-forget agent run — have no response left to
+  // report a failure on, so they push it over the WebSocket instead. Defaults
+  // to a no-op so tests that don't care about broadcasts need no fixture.
+  deps.broadcast = deps.broadcast || (() => {});
   const app = express();
   app.use(express.json());
   app.use(express.static(path.join(__dirname, '..', 'public')));

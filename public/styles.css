@@ -346,10 +346,16 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   background: var(--accent-soft);
   border-left: 2px solid var(--accent);
 }
+/* A 2px inset tick, not a border: the cue that says "this is on screen right
+   now" without spending a box on it. */
+.row--open { color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
 .row-title {
   flex: 1;
   font-size: 13.5px;
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .row-count {
   font-size: 11px;
@@ -599,6 +605,26 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   align-items: center;
   justify-content: space-between;
 }
+.card-top-right { display: flex; align-items: center; gap: 6px; }
+.card-split-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.card-split-btn:hover, .card-split-btn:focus-visible {
+  background: var(--hover);
+  color: var(--text);
+  border-color: var(--text-faint);
+}
 .card-status {
   display: flex;
   align-items: center;
@@ -676,6 +702,19 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   font-size: 13px;
   outline: none;
 }
+.backlog-add-select {
+  flex-shrink: 0;
+  max-width: 130px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
 .backlog-add-btn {
   padding: 10px 18px;
   border-radius: 7px;
@@ -720,18 +759,35 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   white-space: nowrap;
 }
 .backlog-priority {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+  border: none;
+  outline: none;
+  cursor: pointer;
   font-size: 10px;
   padding: 3px 7px;
   border-radius: 4px;
   text-transform: uppercase;
+  text-align: center;
   flex-shrink: 0;
 }
 .backlog-priority--high { color: var(--warn); background: var(--accent-soft); }
 .backlog-priority--medium { color: var(--text-muted); background: var(--surface-2); }
 .backlog-priority--low { color: var(--text-muted); background: var(--surface-2); }
+.backlog-priority option { text-transform: none; color: initial; }
 .backlog-row-project {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+  border: none;
+  outline: none;
+  cursor: pointer;
+  background: transparent;
   font-size: 11.5px;
   color: var(--text-faint);
+  max-width: 160px;
+  text-overflow: ellipsis;
   flex-shrink: 0;
 }
 .backlog-assign-btn {
@@ -768,33 +824,113 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   border-color: var(--border);
 }
 
-.drawer {
-  position: relative;
-  width: 360px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--border);
+/* Deviation from the plan brief's literal Step 10 CSS: the brief specifies
+   `flex: 1` here, which is correct for the eventual multi-pane layout but,
+   for THIS task — where exactly zero or one pane is ever reachable, since no
+   shipped code path passes mode:'split' yet — makes a single open pane split
+   the row roughly 50/50 with .main-content instead of matching the old
+   .drawer's fixed 360px. That is a visible regression against this task's
+   explicit "looks identical to today" requirement, confirmed by measuring:
+   at a 1400px viewport this pane rendered at 558px instead of 360px. Fixed at
+   360/0 shrink here, exactly mirroring the old .drawer, so the one reachable
+   state is pixel-faithful; a later task's real multi-pane sizing replaces
+   this fixed basis with something width-aware (see currentPaneCap). */
+/* The 360px basis that used to live on .pane-stage now lives on the column
+   that wraps it and the dock (Task 7), since the dock needs to sit below the
+   stage rather than beside .main-content. .pane-stage fills the column's
+   vertical space instead; its own row-flex behaviour (panes + dividers) is
+   unchanged, and the .main--workbench override below still hands the freed
+   width to the panes once the dashboard hides at 2+ panes. */
+.stage-column { display: flex; flex-direction: column; flex: 0 0 360px; min-width: 0; }
+.main--workbench .stage-column { flex: 1; }
+/* Neither the stage nor the dock has anything to show — no panes, nothing
+   minimized — so the whole column collapses rather than reserving a blank
+   360px gutter next to the dashboard. */
+.stage-column--empty { display: none; }
+.pane-stage { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.pane-stage--empty { display: none; }
+
+.dock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
   background: var(--surface);
+  flex-shrink: 0;
+}
+.dock-label { flex-shrink: 0; }
+.dock-chips { display: flex; gap: 8px; overflow-x: auto; }
+.dock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dock-chip:hover { border-color: var(--text-faint); color: var(--text); }
+
+.divider {
+  width: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+  position: relative;
+  cursor: col-resize;
+}
+.divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 7px;
+}
+.divider:hover { background: var(--accent); }
+/* A drag that crosses a transcript would otherwise select text in it, and the
+   I-beam cursor would fight the col-resize one. */
+body.is-dragging-divider { user-select: none; cursor: col-resize; }
+
+/* One pane keeps the dashboard visible beside it, exactly as the drawer did.
+   Two or more means the user is working across sessions, so the panes take the
+   room and "All sessions" in the sidebar brings the dashboard back. */
+.main--workbench .main-content { display: none; }
+.pane {
+  position: relative;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
 }
+.pane--focus { background: var(--surface); }
+.pane-header-text { min-width: 0; }
 
-/* Free-drag resize handle on the drawer's left edge. Only meaningful at
-   normal/wide width — at full width there's nothing to drag against, and a
-   minimized drawer has no body to resize. */
-.drawer-resize-handle {
-  position: absolute;
-  top: 0;
-  left: -3px;
-  width: 7px;
-  height: 100%;
-  cursor: ew-resize;
-  z-index: 6;
+/* The activity spine: a 2px hairline across the top of every pane, colored by
+   that agent's real state. N panes give N segments, so the state of the whole
+   workbench reads off the top edge without reading a word — which is the
+   supervision case this feature exists for. */
+.pane-spine { height: 2px; flex-shrink: 0; background: var(--border); }
+.pane-spine--running {
+  background-image: linear-gradient(90deg, var(--accent-soft) 0%, var(--accent) 45%, var(--accent-soft) 90%);
+  background-size: 220px 100%;
+  animation: spine-sweep 2.4s linear infinite;
 }
-.drawer--full .drawer-resize-handle,
-.drawer--min .drawer-resize-handle {
-  display: none;
-}
+.pane-spine--needs-input { background: var(--warn); animation: pulse-dot 1.4s ease-in-out infinite; }
+.pane-spine--idle { background: var(--border); }
+
+@keyframes spine-sweep { from { background-position: 0 0; } to { background-position: 220px 0; } }
+
 .drawer-header {
   padding: 15px 17px;
   border-bottom: 1px solid var(--border-soft);
@@ -832,19 +968,16 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   flex: 1;
   /* Without this the flex default of min-height:auto refuses to shrink the
      body below its content, so a long transcript grows the drawer past the
-     viewport and gets clipped by .drawer's overflow:hidden instead of
+     viewport and gets clipped by .pane's overflow:hidden instead of
      scrolling. This one line is what gives the chat a real scrollbar. */
   min-height: 0;
   overflow-y: auto;
   padding: 16px 17px;
 }
 
-/* ---------- drawer sizing ----------
-   The size button cycles width through normal → wide → full. Full works by
-   letting the drawer take the whole row: .main-content is flex:1 with
-   min-width:0, so it collapses to zero rather than overflowing. Minimize is
-   an independent toggle that hides everything but the header and lets the
-   drawer shrink to that height, leaving a small card in the corner. */
+/* The old drawer's size-cycle and minimize-to-strip behavior lived here; both
+   are gone with the singleton drawer. .pane-minimize-btn is hidden (see the
+   template) until Task 7's dock gives minimize somewhere to restore from. */
 .drawer-controls {
   display: flex;
   align-items: center;
@@ -865,27 +998,6 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .drawer-ctl:hover,
 .drawer-close:hover { color: var(--text); background: var(--surface-2); }
 
-/* Deliberately not transitioned. Animating width on a flex item reflows the
-   sibling .main-content — and its whole session grid — on every frame, which
-   is both expensive and unreliable; the transition was observed sticking at
-   currentTime 0 and pinning the drawer at its start width. Resizing is instant. */
-/* max() so "wide" can never come out narrower than the normal 360px: on a
-   narrow window 60% resolves to less than that, and the widen button would
-   visibly shrink the panel. */
-.drawer--wide { width: max(360px, 60%); }
-.drawer--full { width: 100%; }
-.main--drawer-full .main-content { display: none; }
-
-.drawer--min { align-self: flex-start; width: 360px; }
-.drawer--min .drawer-body,
-.drawer--min .drawer-footer { display: none; }
-.drawer--min .drawer-header { border-bottom: none; }
-.drawer--min .detail-title {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 250px;
-}
 .plan-eyebrow {
   margin-bottom: 10px;
 }
@@ -1479,6 +1591,24 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
 .projects-btn:hover { border-color: var(--accent); color: var(--text); }
 .projects-btn-hint { font-size: 10px; color: var(--accent); }
 
+.layout-ctl[hidden] { display: none; }
+.layout-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 7px;
+  padding: 5px 9px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.layout-ctl:hover { border-color: var(--text-faint); color: var(--text); }
+.layout-glyph { display: inline-flex; gap: 2px; }
+.layout-glyph i { display: block; width: 4px; height: 12px; background: var(--text-faint); border-radius: 1px; }
+.layout-ctl:hover .layout-glyph i { background: var(--accent); }
+
 /* ---------- Onboarding ---------- */
 
 @keyframes onboarding-rise {
@@ -1808,6 +1938,10 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
   border: 1px solid var(--border-soft);
   border-bottom-left-radius: 4px;
 }
+.chat-msg--generating {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent);
+}
 .chat-msg--tool {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10.5px;
@@ -1897,8 +2031,12 @@ body { font-family: 'Hanken Grotesk', system-ui, sans-serif; color: var(--text);
    and overlays it instead); this file deliberately stops at one.
 
    Nothing here adds a border, a box or a divider to hold the collapsed state
-   together — the rail is the same list with its labels removed. .drawer,
-   .drawer--wide, .drawer--full and .main--drawer-full are untouched. */
+   together — the rail is the same list with its labels removed. .pane and
+   .pane-stage are untouched.
+
+   Note: the 360px line item below predates the pane-stage refactor (a pane
+   now sizes by flex rather than a fixed width) and is not recomputed here —
+   that's pane-sizing work for a later task, not this one. */
 @media (max-width: 871px) {
   .sidebar {
     width: 56px;

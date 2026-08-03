@@ -57,6 +57,10 @@
       <div class="eyebrow header-title" id="header-assistant-name" title="Click to rename your assistant">console</div>
     </div>
     <div class="header-right">
+      <button type="button" class="layout-ctl" id="layout-ctl" title="Even out the pane widths" aria-label="Even out the pane widths" hidden>
+        <span class="layout-glyph" id="layout-glyph" aria-hidden="true"></span>
+        <span class="mono layout-ctl-label" id="layout-ctl-label">1 pane</span>
+      </button>
       <div class="running-count projects-btn" id="projects-btn" title="Choose which projects are tracked">
         <span>Projects</span>
         <span class="dotnum projects-btn-hint" id="untracked-hint"></span>
@@ -105,6 +109,9 @@
       <div class="row" id="memory-row" title="Memory">
         <div class="row-title">Memory</div>
       </div>
+
+      <div class="eyebrow sidebar-label sidebar-label--projects" id="open-panes-label" hidden>Open panes</div>
+      <div id="open-panes-list"></div>
 
       <div class="eyebrow sidebar-label sidebar-label--projects">Projects</div>
       <div id="project-list"></div>
@@ -231,6 +238,12 @@
         </div>
         <div class="backlog-add-row">
           <input class="mono backlog-input" id="backlog-input" placeholder="Add a task, then assign it to a repo…">
+          <select class="mono backlog-add-select" id="backlog-folder-select" title="Repo"></select>
+          <select class="mono backlog-add-select" id="backlog-priority-select" title="Priority">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
           <button class="btn dotnum backlog-add-btn" id="backlog-add-btn">+ Add</button>
         </div>
         <div class="backlog-list" id="backlog-list"></div>
@@ -265,78 +278,90 @@
 
       </div>
 
-      <!-- Detail drawer -->
-      <div class="drawer" id="detail-drawer" style="display:none">
-        <div class="drawer-resize-handle" id="drawer-resize-handle" title="Drag to resize"></div>
-        <div class="drawer-header">
-          <div>
-            <div class="drawer-status-row">
-              <div class="status-dot" id="detail-status-dot"></div>
-              <div class="eyebrow" id="detail-status-label"></div>
-            </div>
-            <div class="detail-title" id="detail-title"></div>
-            <div class="mono detail-meta" id="detail-meta"></div>
-          </div>
-          <div class="drawer-controls">
-            <button type="button" class="ghost drawer-ctl" id="detail-minimize-btn" title="Minimize" aria-label="Minimize">—</button>
-            <button type="button" class="ghost drawer-ctl" id="detail-size-btn" title="Widen the panel" aria-label="Widen the panel">⤢</button>
-            <button type="button" class="ghost drawer-close" id="detail-close-btn" title="Close" aria-label="Close">×</button>
-          </div>
-        </div>
+      <!-- Panes are cloned from this template, one per open session. Ids became
+           classes because there can now be several of each on screen at once;
+           everything else is the drawer markup unchanged. -->
+      <div class="stage-column" id="stage-column">
+        <div class="pane-stage" id="pane-stage"></div>
 
-        <div class="drawer-body chat-body" id="chat-history"></div>
-
-        <div class="drawer-footer">
-          <div class="mcp-panel" id="mcp-panel" hidden>
-            <div class="mcp-panel-header">
-              <span class="eyebrow">MCP Servers</span>
-              <button type="button" class="ghost drawer-ctl mcp-panel-close" id="mcp-panel-close" title="Close" aria-label="Close">×</button>
-            </div>
-            <div class="mcp-panel-body" id="mcp-panel-body"></div>
-          </div>
-
-          <div class="composer" id="detail-composer">
-            <div class="slash-popup" id="slash-popup" hidden></div>
-            <textarea class="mono composer-input" id="detail-send-input" rows="1"
-                      placeholder="Send an instruction to this agent…"></textarea>
-            <div class="composer-rail">
-              <button type="button" class="composer-btn" id="detail-attach-btn" title="Insert a file path" aria-label="Insert a file path">@</button>
-              <button type="button" class="composer-btn" id="detail-slash-btn" title="Run a slash command" aria-label="Run a slash command">/</button>
-              <span class="composer-select-wrap">
-                <select class="composer-select" id="detail-model-select" title="Model — Default leaves this unset, so Claude Code uses whatever model your CLI is normally configured to use">
-                  <option value="">Default</option>
-                  <option value="claude-opus-4-8">Opus</option>
-                  <option value="claude-sonnet-5">Sonnet</option>
-                  <option value="claude-haiku-4-5-20251001">Haiku</option>
-                  <option value="claude-fable-5">Fable</option>
-                </select>
-                <span class="composer-caret" aria-hidden="true">▾</span>
-              </span>
-              <span class="composer-select-wrap">
-                <select class="composer-select" id="detail-permission-select" title="Permission mode — Default leaves this unset, so Claude Code uses its normal permission behavior (asks before risky actions)">
-                  <option value="">Default</option>
-                  <option value="plan">Plan</option>
-                  <option value="acceptEdits">Accept Edits</option>
-                  <option value="bypassPermissions">Bypass Permissions</option>
-                  <option value="manual">Manual</option>
-                </select>
-                <span class="composer-caret" aria-hidden="true">▾</span>
-              </span>
-              <button type="button" class="composer-chip" id="detail-mcp-btn" title="Check MCP server status for this project">
-                <span class="composer-chip-dot" id="detail-mcp-dot"></span><span id="detail-mcp-label">mcp</span>
-              </button>
-              <!-- Replaces the selects while the agent runs: the status the user
-                   is waiting on, in the place they're already looking. -->
-              <span class="composer-status" id="detail-composer-status" hidden>
-                <span class="status-dot status-dot--pulse-fast composer-status-dot"></span>
-                <span id="detail-composer-status-text">working…</span>
-              </span>
-              <span class="composer-rail-spacer"></span>
-              <button type="button" class="composer-send" id="detail-send-btn" title="Send (Enter)" aria-label="Send">↑</button>
-            </div>
-          </div>
+        <!-- Minimized panes. Hidden entirely when nothing is minimized — an
+             always-present empty strip is chrome that reports nothing. -->
+        <div class="dock" id="dock" hidden>
+          <span class="eyebrow dock-label">Minimized</span>
+          <div class="dock-chips" id="dock-chips"></div>
         </div>
       </div>
+
+      <template id="pane-template">
+        <div class="pane">
+          <div class="pane-spine"></div>
+          <div class="drawer-header pane-header">
+            <div class="pane-header-text">
+              <div class="drawer-status-row">
+                <div class="status-dot pane-status-dot"></div>
+                <div class="eyebrow pane-status-label"></div>
+              </div>
+              <div class="detail-title"></div>
+              <div class="mono detail-meta"></div>
+            </div>
+            <div class="drawer-controls">
+              <button type="button" class="ghost drawer-ctl pane-minimize-btn" title="Minimize" aria-label="Minimize">—</button>
+              <button type="button" class="ghost drawer-close pane-close-btn" title="Close" aria-label="Close">×</button>
+            </div>
+          </div>
+
+          <div class="drawer-body chat-body pane-chat-history"></div>
+
+          <div class="drawer-footer">
+            <div class="mcp-panel pane-mcp-panel" hidden>
+              <div class="mcp-panel-header">
+                <span class="eyebrow">MCP Servers</span>
+                <button type="button" class="ghost drawer-ctl pane-mcp-panel-close" title="Close" aria-label="Close">×</button>
+              </div>
+              <div class="mcp-panel-body pane-mcp-panel-body"></div>
+            </div>
+
+            <div class="composer pane-composer">
+              <div class="slash-popup pane-slash-popup" hidden></div>
+              <textarea class="mono composer-input pane-send-input" rows="1"
+                        placeholder="Send an instruction to this agent…"></textarea>
+              <div class="composer-rail">
+                <button type="button" class="composer-btn pane-attach-btn" title="Insert a file path" aria-label="Insert a file path">@</button>
+                <button type="button" class="composer-btn pane-slash-btn" title="Run a slash command" aria-label="Run a slash command">/</button>
+                <span class="composer-select-wrap">
+                  <select class="composer-select pane-model-select" title="Model — Default leaves this unset, so Claude Code uses whatever model your CLI is normally configured to use">
+                    <option value="">Default</option>
+                    <option value="claude-opus-4-8">Opus</option>
+                    <option value="claude-sonnet-5">Sonnet</option>
+                    <option value="claude-haiku-4-5-20251001">Haiku</option>
+                    <option value="claude-fable-5">Fable</option>
+                  </select>
+                  <span class="composer-caret" aria-hidden="true">▾</span>
+                </span>
+                <span class="composer-select-wrap">
+                  <select class="composer-select pane-permission-select" title="Permission mode — Default leaves this unset, so Claude Code uses its normal permission behavior (asks before risky actions)">
+                    <option value="">Default</option>
+                    <option value="plan">Plan</option>
+                    <option value="acceptEdits">Accept Edits</option>
+                    <option value="bypassPermissions">Bypass Permissions</option>
+                    <option value="manual">Manual</option>
+                  </select>
+                  <span class="composer-caret" aria-hidden="true">▾</span>
+                </span>
+                <button type="button" class="composer-chip pane-mcp-btn" title="Check MCP server status for this project">
+                  <span class="composer-chip-dot pane-mcp-dot"></span><span class="pane-mcp-label">mcp</span>
+                </button>
+                <span class="composer-status pane-composer-status" hidden>
+                  <span class="status-dot status-dot--pulse-fast composer-status-dot"></span>
+                  <span class="pane-composer-status-text">working…</span>
+                </span>
+                <span class="composer-rail-spacer"></span>
+                <button type="button" class="composer-send pane-send-btn" title="Send (Enter)" aria-label="Send">↑</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
 
     </div>
   </div>
@@ -405,6 +430,7 @@
 
 <script src="/format.js"></script>
 <script src="/sessionSelect.js"></script>
+<script src="/layoutStore.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
